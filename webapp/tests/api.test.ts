@@ -4,7 +4,9 @@ import { AuthApi } from '../src/features/auth/api'
 import { bootstrapAuthSession } from '../src/features/auth/bootstrap'
 import { createBrowserAuthCoordinator } from '../src/features/auth/browser-auth-coordinator'
 import { publishBrowserSessionState } from '../src/features/auth/session-coordinator'
-import { ApiRequestError } from '../src/platform/api'
+import { z } from 'zod'
+
+import { ApiRequestError, HttpClient } from '../src/platform/api'
 
 const originalFetch = globalThis.fetch
 
@@ -500,3 +502,11 @@ function accessTokenFor(subject: string, version: string) {
     btoa(JSON.stringify(value)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
   return `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode({ sub: subject, version })}.signature`
 }
+
+test('a 204 answer has no body and parses as undefined', async () => {
+  globalThis.fetch = (async () => new Response(null, { status: 204 })) as unknown as typeof fetch
+
+  await expect(
+    new HttpClient('http://api.invalid').request('/api/anything', z.undefined(), { method: 'DELETE' }),
+  ).resolves.toBeUndefined()
+})

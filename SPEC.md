@@ -2,7 +2,7 @@
 
 This document is the single source of truth for TaskFlow v1. Code and configuration remain the source of truth for current behavior. This document defines intent, rules, and the remaining work. If code and this document disagree, fix the code or change this document in the same change. Do not leave both.
 
-Status date: 2026-10-20. Slices 1 to 3 are done. Slices 4 to 9 are planned.
+Status date: 2026-10-20. Slices 1 to 8 are done. Slice 9 is planned.
 
 ## Summary for the product owner (Russian)
 
@@ -451,7 +451,17 @@ Email invitations; project-level membership; task attachments; activity history;
 | 1. Sign-in (template) | Done |
 | 2. Organizations and members | Done, 10 integration tests |
 | 3. Access guard and isolation | Done, covered by the same tests |
-| 4 to 9 | Planned |
+| 4. Projects | Done |
+| 5. Tasks, create and read | Done |
+| 6. Tasks, update and delete | Done |
+| 7. Comments | Done |
+| 8. Web application | Done. Unit tests in `webapp/tests`, browser tests in `webapp/e2e/specs/workspace.spec.ts`. The owner still performs the final visual check. |
+| 9. Hardening and release readiness | Planned |
+
+Web application notes (slice 8):
+- Routes: `/app` (organizations, or the first-run screen), `/app/orgs/:organizationId/{board,tasks,tasks/:taskId,my-tasks,projects,members}`.
+- Task status changes on the board use a status control on each card, not drag and drop. The control works with a keyboard and on phones.
+- Each board column loads up to 50 tasks and points to the task list for the rest. Project pickers list up to 100 projects.
 
 Known facts:
 - Local database: Docker Compose service `postgres`, database `taskflow`, port from `POSTGRES_PORT`. The test database `taskflow_test` is created and removed by the test runner.

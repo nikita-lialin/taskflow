@@ -67,7 +67,7 @@ export function ProfilePanel({ user }: { user: UserDto }) {
                 readOnly
                 value={user.email}
               />
-              <FieldDescription>Email changes are not enabled in this template.</FieldDescription>
+              <FieldDescription>Email changes are not available yet.</FieldDescription>
             </Field>
           </FieldGroup>
 

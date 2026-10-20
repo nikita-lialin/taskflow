@@ -1,4 +1,5 @@
 import type { UserDto } from '@taskflow/contracts'
+import type { ReactNode } from 'react'
 
 import {
   Sidebar,
@@ -18,6 +19,7 @@ import { NavUser } from './NavUser'
 
 export function AppSidebar({
   accountPath,
+  contextSection,
   homePath,
   items,
   onLogout,
@@ -26,6 +28,8 @@ export function AppSidebar({
   workspaceLabel,
 }: {
   accountPath?: WorkspaceRoutePath
+  /** Navigation of the current context, shown above the workspace links. */
+  contextSection?: ReactNode
   homePath: WorkspaceRoutePath
   items: ReadonlyArray<DashboardNavigationItem>
   onLogout: () => Promise<void>
@@ -57,6 +61,7 @@ export function AppSidebar({
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
+        {contextSection}
         <NavMain items={items} />
       </SidebarContent>
       <SidebarFooter>

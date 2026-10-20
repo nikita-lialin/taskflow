@@ -19,6 +19,7 @@ import {
   homePathForRole,
   navigationItemsForRole,
 } from '@/features/navigation'
+import { OrganizationSidebarSection, organizationSectionTitle } from '@/features/organizations'
 
 const iconsByPath = {
   '/app': Home01Icon,
@@ -61,16 +62,21 @@ export function WorkspaceShell({
     <SidebarProvider defaultOpen={getSidebarDefaultOpen()}>
       <AppSidebar
         accountPath={user.role === 'user' ? '/app/profile' : undefined}
+        contextSection={user.role === 'user' ? <OrganizationSidebarSection /> : undefined}
         homePath={homePath}
         items={items}
         onLogout={onLogout}
         settingsPath={settingsPath}
         user={user}
-        workspaceLabel={user.role === 'admin' ? 'Admin workspace' : 'User workspace'}
+        workspaceLabel={user.role === 'admin' ? 'Admin workspace' : 'Your workspace'}
       />
       <SidebarInset>
         <SiteHeader
-          title={activeItem?.label ?? (user.role === 'admin' ? 'Dashboard' : 'Home')}
+          title={
+            activeItem?.label ??
+            organizationSectionTitle(pathname) ??
+            (user.role === 'admin' ? 'Dashboard' : 'Home')
+          }
         />
         <div className="flex min-w-0 flex-1 flex-col">{children}</div>
       </SidebarInset>

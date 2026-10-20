@@ -16,6 +16,9 @@ function run(command: string, args: string[], env: NodeJS.ProcessEnv = process.e
   const result = spawnSync(command, args, {
     cwd: repositoryRoot,
     env,
+    // Playwright runs this under Node. On Windows `bun` can be an npm `.cmd` shim, which Node
+    // starts only through a shell.
+    shell: process.platform === 'win32',
     stdio: 'inherit',
   })
 

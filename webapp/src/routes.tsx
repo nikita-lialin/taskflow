@@ -71,6 +71,54 @@ const userSettingsRoute = createRoute({
   component: lazyRouteComponent(() => import('./pages'), 'UserSettingsPage'),
 })
 
+const newOrganizationRoute = createRoute({
+  getParentRoute: () => userWorkspaceRoute,
+  path: '/app/organizations/new',
+  component: lazyRouteComponent(() => import('./pages'), 'NewOrganizationRoutePage'),
+})
+
+const organizationRoute = createRoute({
+  getParentRoute: () => userWorkspaceRoute,
+  path: '/app/orgs/$organizationId',
+  component: lazyRouteComponent(() => import('./pages'), 'OrganizationIndexPage'),
+})
+
+const boardRoute = createRoute({
+  getParentRoute: () => userWorkspaceRoute,
+  path: '/app/orgs/$organizationId/board',
+  component: lazyRouteComponent(() => import('./pages'), 'BoardPage'),
+})
+
+const tasksRoute = createRoute({
+  getParentRoute: () => userWorkspaceRoute,
+  path: '/app/orgs/$organizationId/tasks',
+  component: lazyRouteComponent(() => import('./pages'), 'TasksPage'),
+})
+
+const taskRoute = createRoute({
+  getParentRoute: () => userWorkspaceRoute,
+  path: '/app/orgs/$organizationId/tasks/$taskId',
+  component: lazyRouteComponent(() => import('./pages'), 'TaskPage'),
+})
+
+const myTasksRoute = createRoute({
+  getParentRoute: () => userWorkspaceRoute,
+  path: '/app/orgs/$organizationId/my-tasks',
+  component: lazyRouteComponent(() => import('./pages'), 'MyTasksPage'),
+})
+
+const projectsRoute = createRoute({
+  getParentRoute: () => userWorkspaceRoute,
+  path: '/app/orgs/$organizationId/projects',
+  component: lazyRouteComponent(() => import('./pages'), 'ProjectsRoutePage'),
+})
+
+const membersRoute = createRoute({
+  getParentRoute: () => userWorkspaceRoute,
+  path: '/app/orgs/$organizationId/members',
+  component: lazyRouteComponent(() => import('./pages'), 'MembersRoutePage'),
+})
+
 const adminWorkspaceRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: 'adminWorkspace',
@@ -105,6 +153,14 @@ const routeTree = rootRoute.addChildren([
     userHomeRoute,
     userProfileRoute,
     userSettingsRoute,
+    newOrganizationRoute,
+    organizationRoute,
+    boardRoute,
+    tasksRoute,
+    taskRoute,
+    myTasksRoute,
+    projectsRoute,
+    membersRoute,
   ]),
   adminWorkspaceRoute.addChildren([
     adminDashboardRoute,

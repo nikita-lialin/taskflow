@@ -1,4 +1,4 @@
-import { Outlet, useLocation, useRouter, useSearch } from '@tanstack/react-router'
+import { Navigate, Outlet, useLocation, useParams, useRouter, useSearch } from '@tanstack/react-router'
 import type { UserDto, UserRole } from '@taskflow/contracts'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 
@@ -20,7 +20,15 @@ import {
   useAuth,
 } from '@/features/auth'
 import { homePathForRole, safeReturnPath } from '@/features/navigation'
-import { UserHome, UserProfile, UserSettings } from '@/features/users'
+import {
+  MembersPage,
+  NewOrganizationPage,
+  OrganizationHome,
+  OrganizationScope,
+} from '@/features/organizations'
+import { ProjectsPage } from '@/features/projects'
+import { TaskBoard, TaskDetailPage, TaskListPage } from '@/features/tasks'
+import { UserProfile, UserSettings } from '@/features/users'
 
 export function HomePage() {
   const auth = useAuth()
@@ -89,7 +97,7 @@ export function ResetPasswordPage() {
 
 export function UserHomePage() {
   const user = useWorkspaceUser('user')
-  return <UserHome user={user} />
+  return <OrganizationHome user={user} />
 }
 
 export function UserProfilePage() {
@@ -100,6 +108,66 @@ export function UserProfilePage() {
 export function UserSettingsPage() {
   const auth = useAuth()
   return <UserSettings onLogout={auth.logout} />
+}
+
+export function NewOrganizationRoutePage() {
+  return <NewOrganizationPage />
+}
+
+export function OrganizationIndexPage() {
+  const organizationId = useOrganizationParam()
+  return (
+    <Navigate params={{ organizationId }} replace to="/app/orgs/$organizationId/board" />
+  )
+}
+
+export function BoardPage() {
+  return (
+    <OrganizationRoute>
+      <TaskBoard />
+    </OrganizationRoute>
+  )
+}
+
+export function TasksPage() {
+  return (
+    <OrganizationRoute>
+      <TaskListPage mode="all" />
+    </OrganizationRoute>
+  )
+}
+
+export function MyTasksPage() {
+  return (
+    <OrganizationRoute>
+      <TaskListPage mode="mine" />
+    </OrganizationRoute>
+  )
+}
+
+export function TaskPage() {
+  const { taskId } = useParams({ strict: false })
+  return (
+    <OrganizationRoute>
+      <TaskDetailPage key={taskId} taskId={taskId ?? ''} />
+    </OrganizationRoute>
+  )
+}
+
+export function ProjectsRoutePage() {
+  return (
+    <OrganizationRoute>
+      <ProjectsPage />
+    </OrganizationRoute>
+  )
+}
+
+export function MembersRoutePage() {
+  return (
+    <OrganizationRoute>
+      <MembersPage />
+    </OrganizationRoute>
+  )
 }
 
 export function AdminDashboardPage() {
@@ -181,6 +249,22 @@ function GuestAuthPage({
   }
 
   return children
+}
+
+function useOrganizationParam() {
+  const { organizationId } = useParams({ strict: false })
+  if (!organizationId) throw new Error('Organization page rendered without an organization id')
+  return organizationId
+}
+
+// Keyed by organization, so switching organizations never carries filters or drafts across.
+function OrganizationRoute({ children }: { children: ReactNode }) {
+  const organizationId = useOrganizationParam()
+  return (
+    <OrganizationScope key={organizationId} organizationId={organizationId}>
+      {children}
+    </OrganizationScope>
+  )
 }
 
 function usePasswordResetToken() {

@@ -3,21 +3,8 @@ import type { UserDto } from '@taskflow/contracts'
 import { PageContainer, PageHeader } from '@/components/PageLayout'
 import { AvatarPanel } from '@/features/avatar'
 import { AppearancePanel } from '@/features/settings'
-import { AccountSummary } from './AccountSummary'
 import { ProfilePanel } from './ProfilePanel'
 import { SessionPanel } from './SessionPanel'
-
-export function UserHome({ user }: { user: UserDto }) {
-  return (
-    <PageContainer>
-      <PageHeader
-        description="Review your account status and continue managing your workspace."
-        title={`Welcome, ${user.displayName ?? user.email}`}
-      />
-      <AccountSummary user={user} />
-    </PageContainer>
-  )
-}
 
 export function UserProfile({ user }: { user: UserDto }) {
   return (

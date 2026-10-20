@@ -41,7 +41,8 @@ export class HttpClient {
     options: HttpRequestOptions = {},
   ): Promise<z.infer<TSchema>> {
     const response = await this.raw(path, options)
-    return schema.parse(await response.json())
+    // A 204 has no body. Callers pass `z.undefined()` for such routes.
+    return schema.parse(response.status === 204 ? undefined : await response.json())
   }
 
   async raw(path: string, options: HttpRequestOptions = {}): Promise<Response> {

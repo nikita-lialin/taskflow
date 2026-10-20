@@ -5,7 +5,19 @@ import type { UserRole } from '@taskflow/contracts'
 // login round-trip whether or not the sidebar links to it. `tests/navigation.test.ts` fails when
 // this table and the router drift apart.
 export const workspaceRoutesByRole = {
-  user: ['/app', '/app/profile', '/app/settings'],
+  user: [
+    '/app',
+    '/app/profile',
+    '/app/settings',
+    '/app/organizations/new',
+    '/app/orgs/$organizationId',
+    '/app/orgs/$organizationId/board',
+    '/app/orgs/$organizationId/tasks',
+    '/app/orgs/$organizationId/tasks/$taskId',
+    '/app/orgs/$organizationId/my-tasks',
+    '/app/orgs/$organizationId/projects',
+    '/app/orgs/$organizationId/members',
+  ],
   admin: ['/admin', '/admin/users', '/admin/settings'],
 } as const satisfies Record<UserRole, ReadonlyArray<`/${string}`>>
 
