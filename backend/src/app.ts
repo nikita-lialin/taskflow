@@ -14,6 +14,7 @@ import { errorResponse, handleError, validationErrorHook } from './http/errors'
 import { createReadinessProbe } from './http/readiness'
 import { createAuthSecurity, createFixedWindowRateLimit } from './http/security'
 import { createAuthModule, type AuthHttpEnv } from './modules/auth'
+import { createCommentsModule } from './modules/comments'
 import { createOrganizationsModule } from './modules/organizations'
 import { createProjectsModule } from './modules/projects'
 import { createTasksModule } from './modules/tasks'
@@ -64,6 +65,11 @@ export function createApp({
   })
   const organizations = createOrganizationsModule({ db: prisma, requireAuth: auth.requireAuth })
   const projects = createProjectsModule({
+    db: prisma,
+    requireAuth: auth.requireAuth,
+    requireMembership: organizations.requireMembership,
+  })
+  const comments = createCommentsModule({
     db: prisma,
     requireAuth: auth.requireAuth,
     requireMembership: organizations.requireMembership,
@@ -158,7 +164,9 @@ export function createApp({
   app.route('/api/users', users.userRoutes)
   app.route('/api/admin', users.adminRoutes)
   app.route('/api/organizations', organizations.routes)
-  // Tasks come first: the projects guard covers `/projects/*` and would run twice on task creation.
+  // Comments come before tasks, whose guard covers `/tasks/*`. Tasks come before projects, whose
+  // guard covers `/projects/*`. Otherwise a guard runs twice.
+  app.route('/api/organizations/:organizationId', comments.routes)
   app.route('/api/organizations/:organizationId', tasks.routes)
   app.route('/api/organizations/:organizationId/projects', projects.routes)
   app.route('/api/uploads', uploads.routes)

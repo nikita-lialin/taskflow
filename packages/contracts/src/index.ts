@@ -1,4 +1,5 @@
 export * from './auth'
+export * from './comments'
 export * from './errors'
 export * from './organizations'
 export * from './pagination'
