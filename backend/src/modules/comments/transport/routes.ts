@@ -13,7 +13,7 @@ import type { MiddlewareHandler } from 'hono'
 import type { ZodType } from 'zod'
 
 import { validationErrorHook } from '../../../http/errors'
-import { ingressErrorResponses } from '../../../http/openapi'
+import { ingressErrorResponses, rateLimitErrorResponses } from '../../../http/openapi'
 import type { AuthHttpEnv } from '../../auth'
 import type { OrganizationHttpEnv } from '../../organizations'
 import type { CommentsService } from '../application/comments-service'
@@ -80,6 +80,7 @@ const deleteCommentRoute = createRoute({
   security: bearerSecurity,
   request: { params: commentParamsSchema },
   responses: {
+    ...rateLimitErrorResponses,
     204: { description: 'Comment deleted' },
     400: invalid,
     401: unauthorized,

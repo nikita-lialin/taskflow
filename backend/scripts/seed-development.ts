@@ -2,6 +2,7 @@ import 'dotenv/config'
 
 import { createPrisma } from '../src/db'
 import { seedDemoFixtures } from './demo-fixtures'
+import { seedDemoWorkspace } from './demo-taskflow'
 import { parseDevelopmentSeedConfig } from './development-seed-config'
 import { bootstrapDevelopmentData } from './development-seed'
 
@@ -17,6 +18,11 @@ try {
   if (config.demo) {
     const demo = await seedDemoFixtures(prisma)
     console.log(`Seeded ${demo.count} demo fixture users.`)
+    const workspace = await seedDemoWorkspace(prisma, {
+      adminEmail: result.admin.email,
+      userEmail: result.user.email,
+    })
+    console.log(`Seeded ${workspace.organizations} demo organizations.`)
   }
 } finally {
   await prisma.$disconnect()

@@ -15,7 +15,7 @@ import type { MiddlewareHandler } from 'hono'
 import type { ZodType } from 'zod'
 
 import { validationErrorHook } from '../../../http/errors'
-import { ingressErrorResponses } from '../../../http/openapi'
+import { ingressErrorResponses, rateLimitErrorResponses } from '../../../http/openapi'
 import type { AuthHttpEnv } from '../../auth'
 import type { OrganizationsService } from '../application/organizations-service'
 import { executeOrganizations } from './errors'
@@ -119,6 +119,7 @@ const removeMemberRoute = createRoute({
   security: bearerSecurity,
   request: { params: organizationMemberParamsSchema },
   responses: {
+    ...rateLimitErrorResponses,
     204: { description: 'Member removed' },
     401: unauthorized,
     403: forbidden,

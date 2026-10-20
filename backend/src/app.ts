@@ -3,7 +3,8 @@
 import 'zod/compile'
 
 import { OpenAPIHono } from '@hono/zod-openapi'
-import { except } from 'hono/combine'
+import { every, except } from 'hono/combine'
+import type { MiddlewareHandler } from 'hono'
 import { cors } from 'hono/cors'
 import { secureHeaders } from 'hono/secure-headers'
 
@@ -57,31 +58,49 @@ export function createApp({
     store: rateLimitStore('admin-users-read'),
     windowSeconds: env.ADMIN_USERS_READ_RATE_LIMIT_WINDOW_SECONDS,
   })
+  // Writes cost more than reads, so each signed-in user also has a write budget of their own.
+  // Some routes run their guard more than once per request (`/tasks` and `/tasks/*` both match);
+  // the set makes sure a request spends the budget once.
+  const userWriteRateLimit = createFixedWindowRateLimit<AuthHttpEnv>({
+    errorMessage: 'Too many write requests',
+    key: (c) => c.var.user.id,
+    max: env.WRITE_RATE_LIMIT_MAX,
+    store: rateLimitStore('write'),
+    windowSeconds: env.WRITE_RATE_LIMIT_WINDOW_SECONDS,
+  })
+  const countedWrites = new WeakSet<Request>()
+  const requireAuth: MiddlewareHandler<AuthHttpEnv> = every(auth.requireAuth, async (c, next) => {
+    if (['GET', 'HEAD', 'OPTIONS'].includes(c.req.method) || countedWrites.has(c.req.raw)) {
+      return next()
+    }
+    countedWrites.add(c.req.raw)
+    return userWriteRateLimit(c, next)
+  })
   const users = createUsersModule({
     adminUsersReadRateLimit,
     db: prisma,
     requireAdmin: auth.requireAdmin,
-    requireAuth: auth.requireAuth,
+    requireAuth,
   })
-  const organizations = createOrganizationsModule({ db: prisma, requireAuth: auth.requireAuth })
+  const organizations = createOrganizationsModule({ db: prisma, requireAuth })
   const projects = createProjectsModule({
     db: prisma,
-    requireAuth: auth.requireAuth,
+    requireAuth,
     requireMembership: organizations.requireMembership,
   })
   const comments = createCommentsModule({
     db: prisma,
-    requireAuth: auth.requireAuth,
+    requireAuth,
     requireMembership: organizations.requireMembership,
   })
   const tasks = createTasksModule({
     db: prisma,
-    requireAuth: auth.requireAuth,
+    requireAuth,
     requireMembership: organizations.requireMembership,
   })
   const uploads = createUploadsModule({
     db: prisma,
-    requireAuth: auth.requireAuth,
+    requireAuth,
     storage: storage.storage,
   })
   const app = new OpenAPIHono<AuthHttpEnv>({

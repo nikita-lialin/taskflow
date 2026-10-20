@@ -14,7 +14,7 @@ import type { MiddlewareHandler } from 'hono'
 import type { ZodType } from 'zod'
 
 import { validationErrorHook } from '../../../http/errors'
-import { ingressErrorResponses } from '../../../http/openapi'
+import { ingressErrorResponses, rateLimitErrorResponses } from '../../../http/openapi'
 import type { AuthHttpEnv } from '../../auth'
 import type { OrganizationHttpEnv } from '../../organizations'
 import type { TasksService } from '../application/tasks-service'
@@ -99,6 +99,7 @@ const deleteTaskRoute = createRoute({
   security: bearerSecurity,
   request: { params: taskParamsSchema },
   responses: {
+    ...rateLimitErrorResponses,
     204: { description: 'Task deleted' },
     400: invalid,
     401: unauthorized,

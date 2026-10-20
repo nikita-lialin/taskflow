@@ -57,6 +57,8 @@ const envSchema = z.object({
   AUTH_BODY_LIMIT_BYTES: z.coerce.number().int().positive().max(1024 * 1024).default(64 * 1024),
   AUTH_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(60),
   AUTH_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
+  WRITE_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(120),
+  WRITE_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
   ADMIN_USERS_READ_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(120),
   ADMIN_USERS_READ_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
   // Where the auth and admin limiters count. `memory` is one process's own table and the whole

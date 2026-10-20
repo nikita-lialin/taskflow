@@ -2,7 +2,7 @@
 
 This document is the single source of truth for TaskFlow v1. Code and configuration remain the source of truth for current behavior. This document defines intent, rules, and the remaining work. If code and this document disagree, fix the code or change this document in the same change. Do not leave both.
 
-Status date: 2026-10-20. Slices 1 to 8 are done. Slice 9 is planned.
+Status date: 2026-10-20. Slices 1 to 9 are done. Version 1 is release-ready.
 
 ## Summary for the product owner (Russian)
 
@@ -166,7 +166,7 @@ Delete behavior:
 | Task | Cascades to comments. |
 | User | Cascades to memberships. Sets task assignee to null. **Blocked** while the user created tasks or wrote comments (`Restrict`). Account deletion is out of scope for v1. |
 
-### 2.3 Planned schema changes
+### 2.3 Schema changes added in slices 4 and 5
 
 **Slice 4: project key.** Task identifiers like `WEB-12` need a short project key.
 
@@ -314,7 +314,7 @@ Done (slices 1 to 3):
 | `PATCH /api/organizations/:organizationId/members/:userId` | Change role | admin |
 | `DELETE /api/organizations/:organizationId/members/:userId` | Remove member, or leave | admin, or self |
 
-Planned:
+Added in slices 4 to 7:
 
 | Method and path | Purpose | Slice |
 | --- | --- | --- |
@@ -349,8 +349,8 @@ Planned:
 
 ### 4.7 Security and limits
 
-- All `/api/*` routes except `/api/auth/*` share the account rate limit (`AUTH_RATE_LIMIT_*`). Slice 9 adds a tighter limit for write endpoints.
-- Request bodies are limited by `AUTH_BODY_LIMIT_BYTES`. Slice 9 sets larger limits for task and comment bodies.
+- All `/api/*` routes except `/api/auth/*` share the account rate limit (`AUTH_RATE_LIMIT_*`), keyed by client address, for writes. Signed-in writes also spend a per-user budget (`WRITE_RATE_LIMIT_*`, default 120 per minute). Each request spends it once. Reads are not counted. Both answer 429 `RATE_LIMITED`.
+- Request bodies are limited by `AUTH_BODY_LIMIT_BYTES` (64 KB) on every API route, before authentication. The largest valid task (description of 10000 characters) needs at most 40 KB, and the largest comment (5000 characters) at most 20 KB, so the limit never blocks a valid request. Larger bodies get 413 `PAYLOAD_TOO_LARGE`.
 - Never log tokens, passwords, or comment bodies.
 - Local secrets stay in `backend/.env`, which Git ignores.
 
@@ -363,9 +363,9 @@ Planned:
 - Run one backend integration file: `bun run --cwd backend test:integration src/modules/<feature>/<file>.integration.test.ts`. Docker must run. The runner starts and removes its own test database.
 - Run all backend tests: `bun run test:backend`.
 
-## 6. Remaining slices
+## 6. Slices
 
-Each slice delivers: contract, migration (if any), failing tests first, backend, webapp (slice 8 only), and green checks. A slice is done only when all listed tests pass.
+All slices are done. Each slice delivered: contract, migration (if any), failing tests first, backend, webapp (slice 8 only), and green checks. A slice is done only when all listed tests pass.
 
 ### Slice 4: Projects
 
@@ -436,6 +436,12 @@ Requirements:
 - README for the project: local run steps (Docker Compose, migrate, seed, dev), test commands, environment variables. Remove template-only text and `CHECKLIST.md`.
 - Run `bun run check` (needs Docker and package registry access) and fix findings.
 
+Result:
+- Write limit: `WRITE_RATE_LIMIT_MAX` per `WRITE_RATE_LIMIT_WINDOW_SECONDS` for each signed-in user, in `backend/src/app.ts`. The existing body limit already covers task and comment payloads (section 4.7).
+- Seed: `DEV_SEED_DEMO=1 bun run dev:seed` builds the organizations Acme Studio and Globex Labs in `backend/scripts/demo-taskflow.ts`. It is opt-in so end-to-end tests keep a clean database.
+- Indexes: query plans were measured on 105000 tasks (35000 in one organization) for the default list, project and status filters, "my tasks", overdue, board columns, and title search. Every query ran in 25 ms or less on the existing indexes. No index was added. Add a trigram index only if title search grows slower.
+- OpenAPI: `backend/src/http/openapi-errors.test.ts` fails when a route omits 400, 401, 403, 404, 413, or 429 where it can return them.
+
 Tests:
 - Integration: rate limit returns 429 with the standard error shape; oversized body returns 413; seed is idempotent.
 - Full suite green.
@@ -456,7 +462,7 @@ Email invitations; project-level membership; task attachments; activity history;
 | 6. Tasks, update and delete | Done |
 | 7. Comments | Done |
 | 8. Web application | Done. Unit tests in `webapp/tests`, browser tests in `webapp/e2e/specs/workspace.spec.ts`. The owner still performs the final visual check. |
-| 9. Hardening and release readiness | Planned |
+| 9. Hardening and release readiness | Done. Per-user write limit, body-limit tests, demo workspace seed, OpenAPI error audit test, README. |
 
 Web application notes (slice 8):
 - Routes: `/app` (organizations, or the first-run screen), `/app/orgs/:organizationId/{board,tasks,tasks/:taskId,my-tasks,projects,members}`.
