@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { emailSchema, userRoleSchema, userSchema } from './auth'
+import { MAX_PAGE, paginationQueryShape, paginationResponseShape } from './pagination'
 
 export const updateProfileRequestSchema = z
   .object({
@@ -14,21 +15,9 @@ export const updateProfileResponseSchema = z
   })
   .strict()
 
-const positiveIntegerQuerySchema = (defaultValue: number, maximum?: number) =>
-  z.coerce.number().int().positive().max(maximum ?? Number.MAX_SAFE_INTEGER).default(defaultValue)
+export const ADMIN_USERS_MAX_PAGE = MAX_PAGE
 
-export const ADMIN_USERS_MAX_PAGE = 100
-
-export const adminUsersQuerySchema = z
-  .object({
-    q: z.preprocess(
-      (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
-      z.string().trim().max(100).optional(),
-    ),
-    page: positiveIntegerQuerySchema(1, ADMIN_USERS_MAX_PAGE),
-    pageSize: positiveIntegerQuerySchema(20, 100),
-  })
-  .strict()
+export const adminUsersQuerySchema = z.object(paginationQueryShape).strict()
 
 export const adminUserParamsSchema = z
   .object({
@@ -49,10 +38,7 @@ export const adminUserSummarySchema = z
 export const adminUsersResponseSchema = z
   .object({
     items: z.array(adminUserSummarySchema),
-    page: z.number().int().positive().max(ADMIN_USERS_MAX_PAGE),
-    pageSize: z.number().int().positive().max(100),
-    total: z.number().int().nonnegative(),
-    hasNext: z.boolean(),
+    ...paginationResponseShape,
   })
   .strict()
 

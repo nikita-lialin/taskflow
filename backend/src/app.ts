@@ -15,6 +15,7 @@ import { createReadinessProbe } from './http/readiness'
 import { createAuthSecurity, createFixedWindowRateLimit } from './http/security'
 import { createAuthModule, type AuthHttpEnv } from './modules/auth'
 import { createOrganizationsModule } from './modules/organizations'
+import { createProjectsModule } from './modules/projects'
 import { createUploadsModule } from './modules/uploads'
 import { createUsersModule } from './modules/users'
 import { createRateLimitStores } from './rate-limit'
@@ -61,6 +62,11 @@ export function createApp({
     requireAuth: auth.requireAuth,
   })
   const organizations = createOrganizationsModule({ db: prisma, requireAuth: auth.requireAuth })
+  const projects = createProjectsModule({
+    db: prisma,
+    requireAuth: auth.requireAuth,
+    requireMembership: organizations.requireMembership,
+  })
   const uploads = createUploadsModule({
     db: prisma,
     requireAuth: auth.requireAuth,
@@ -146,6 +152,7 @@ export function createApp({
   app.route('/api/users', users.userRoutes)
   app.route('/api/admin', users.adminRoutes)
   app.route('/api/organizations', organizations.routes)
+  app.route('/api/organizations/:organizationId/projects', projects.routes)
   app.route('/api/uploads', uploads.routes)
 
   // Only the filesystem driver needs the backend to serve the URLs it signs. With an S3 driver

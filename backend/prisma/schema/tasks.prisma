@@ -58,8 +58,12 @@ model OrganizationMember {
 model Project {
   id             String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
   organizationId String    @map("organization_id") @db.Uuid
+  /// Short identifier used in task identifiers such as `WEB-12`. Immutable after creation.
+  key            String
   name           String
   description    String?
+  /// Next task number of the project. Task creation allocates it with one atomic update.
+  nextTaskNumber Int       @default(1) @map("next_task_number")
   archivedAt     DateTime? @map("archived_at")
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @updatedAt @map("updated_at")
@@ -71,6 +75,8 @@ model Project {
   /// project's organization at the database level.
   @@unique([id, organizationId], map: "projects_id_organization_id_key")
   @@unique([organizationId, name], map: "projects_organization_id_name_key")
+  @@unique([organizationId, key], map: "projects_organization_id_key_key")
+  @@index([organizationId, archivedAt, createdAt], map: "projects_organization_id_archived_at_created_at_idx")
   @@map("projects")
 }
 
