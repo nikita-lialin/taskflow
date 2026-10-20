@@ -20,6 +20,7 @@ type TaskJson = {
   assignee: { id: string; email: string; displayName: string | null } | null
   creator: { id: string; email: string; displayName: string | null }
   dueDate: string | null
+  updatedAt: string
 }
 
 const unknownId = '018f0000-0000-7000-8000-000000000000'
@@ -55,6 +56,8 @@ describe('tasks', () => {
       ['POST', projectTasksPath(acme.id, website.id)],
       ['GET', tasksPath(acme.id)],
       ['GET', `${tasksPath(acme.id)}/${task.id}`],
+      ['PATCH', `${tasksPath(acme.id)}/${task.id}`],
+      ['DELETE', `${tasksPath(acme.id)}/${task.id}`],
     ] as const) {
       const response = await app.request(path, { method })
       expect(response.status, `${method} ${path}`).toBe(401)
@@ -526,6 +529,290 @@ describe('tasks', () => {
     expect((await response.json()).error.code).toBe('NOT_FOUND')
   })
 
+  test('lets an administrator edit every field of any task', async () => {
+    const { alice, bob, acme, website } = await setup()
+    const task = await createTask(bob, acme.id, website.id, { title: 'Original', description: 'Old' })
+    const dueDate = '2031-02-03T04:05:06.000Z'
+
+    const response = await call(alice, 'PATCH', taskPath(acme.id, task.id), {
+      title: '  Renamed  ',
+      description: '  New text  ',
+      status: 'in_progress',
+      priority: 'high',
+      assigneeId: alice.user.id,
+      dueDate,
+    })
+
+    expect(response.status).toBe(200)
+    const { task: updated } = await response.json()
+    expect(updated).toMatchObject({
+      id: task.id,
+      key: task.key,
+      title: 'Renamed',
+      description: 'New text',
+      status: 'in_progress',
+      priority: 'high',
+      assignee: { id: alice.user.id },
+      creator: { id: bob.user.id },
+      dueDate,
+    })
+    expect(new Date(updated.updatedAt).getTime()).toBeGreaterThan(new Date(task.updatedAt).getTime())
+    const read = await call(alice, 'GET', taskPath(acme.id, task.id))
+    expect((await read.json()).task).toEqual(updated)
+  })
+
+  test('changes one field and leaves the others alone', async () => {
+    const { alice, bob, acme, website } = await setup()
+    const task = await createTask(alice, acme.id, website.id, {
+      title: 'Keep',
+      description: 'Text',
+      priority: 'low',
+      assigneeId: bob.user.id,
+      dueDate: '2031-01-01T00:00:00.000Z',
+    })
+
+    const response = await call(alice, 'PATCH', taskPath(acme.id, task.id), { status: 'done' })
+
+    expect(response.status).toBe(200)
+    expect((await response.json()).task).toMatchObject({
+      title: 'Keep',
+      description: 'Text',
+      status: 'done',
+      priority: 'low',
+      assignee: { id: bob.user.id },
+      dueDate: '2031-01-01T00:00:00.000Z',
+    })
+    // Moving to and from done has no side effects.
+    const reopened = await call(alice, 'PATCH', taskPath(acme.id, task.id), { status: 'todo' })
+    expect((await reopened.json()).task).toMatchObject({ status: 'todo', assignee: { id: bob.user.id } })
+  })
+
+  test('clears the nullable fields with null', async () => {
+    const { alice, bob, acme, website } = await setup()
+    const task = await createTask(alice, acme.id, website.id, {
+      title: 'Full',
+      description: 'Text',
+      assigneeId: bob.user.id,
+      dueDate: '2031-01-01T00:00:00.000Z',
+    })
+
+    const response = await call(alice, 'PATCH', taskPath(acme.id, task.id), {
+      description: null,
+      assigneeId: null,
+      dueDate: null,
+    })
+
+    expect(response.status).toBe(200)
+    expect((await response.json()).task).toMatchObject({ description: null, assignee: null, dueDate: null })
+    expect(await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).toMatchObject({
+      description: null,
+      assigneeId: null,
+      dueDate: null,
+    })
+  })
+
+  test('turns an empty description into null', async () => {
+    const { alice, acme, website } = await setup()
+    const task = await createTask(alice, acme.id, website.id, { title: 'Full', description: 'Text' })
+
+    const response = await call(alice, 'PATCH', taskPath(acme.id, task.id), { description: '   ' })
+
+    expect((await response.json()).task.description).toBeNull()
+  })
+
+  test('lets a member edit tasks they created or that are assigned to them', async () => {
+    const { alice, bob, acme, website } = await setup()
+    const created = await createTask(bob, acme.id, website.id, { title: 'Bob made' })
+    const assigned = await createTask(alice, acme.id, website.id, { title: 'Bob works', assigneeId: bob.user.id })
+
+    const first = await call(bob, 'PATCH', taskPath(acme.id, created.id), { title: 'Bob edited' })
+    const second = await call(bob, 'PATCH', taskPath(acme.id, assigned.id), { status: 'in_progress' })
+
+    expect(first.status).toBe(200)
+    expect((await first.json()).task.title).toBe('Bob edited')
+    expect(second.status).toBe(200)
+    expect((await second.json()).task.status).toBe('in_progress')
+  })
+
+  test('denies a member who neither created nor was assigned the task', async () => {
+    const { alice, bob, acme, website } = await setup()
+    const task = await createTask(alice, acme.id, website.id, { title: 'Alice only' })
+
+    const response = await call(bob, 'PATCH', taskPath(acme.id, task.id), { title: 'Hijacked' })
+
+    expect(response.status).toBe(403)
+    expect((await response.json()).error.code).toBe('FORBIDDEN')
+    expect(await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).toMatchObject({ title: 'Alice only' })
+  })
+
+  test('denies a member before checking the new values', async () => {
+    const { alice, bob, acme, website } = await setup()
+    const task = await createTask(alice, acme.id, website.id, { title: 'Alice only' })
+
+    const response = await call(bob, 'PATCH', taskPath(acme.id, task.id), { assigneeId: unknownId })
+
+    expect(response.status).toBe(403)
+  })
+
+  test('keeps the right to edit after a reassignment only for the creator', async () => {
+    const { alice, bob, acme, website } = await setup()
+    const assignedToBob = await createTask(alice, acme.id, website.id, { title: 'Alice made', assigneeId: bob.user.id })
+    const bobMade = await createTask(bob, acme.id, website.id, { title: 'Bob made' })
+
+    // Bob hands over a task he did not create and loses access to it.
+    const handOver = await call(bob, 'PATCH', taskPath(acme.id, assignedToBob.id), { assigneeId: alice.user.id })
+    const afterHandOver = await call(bob, 'PATCH', taskPath(acme.id, assignedToBob.id), { title: 'Again' })
+    // Bob hands over a task he created and keeps access to it.
+    await call(bob, 'PATCH', taskPath(acme.id, bobMade.id), { assigneeId: alice.user.id })
+    const afterOwnHandOver = await call(bob, 'PATCH', taskPath(acme.id, bobMade.id), { title: 'Still mine' })
+
+    expect(handOver.status).toBe(200)
+    expect(afterHandOver.status).toBe(403)
+    expect(afterOwnHandOver.status).toBe(200)
+  })
+
+  test('rejects an assignee who is not a member of the organization', async () => {
+    const { alice, acme, website } = await setup()
+    const outsider = await register('outsider@example.com')
+    const task = await createTask(alice, acme.id, website.id, { title: 'Task', assigneeId: alice.user.id })
+
+    for (const assigneeId of [outsider.user.id, unknownId]) {
+      const response = await call(alice, 'PATCH', taskPath(acme.id, task.id), { assigneeId })
+      expect(response.status).toBe(400)
+      const { error } = await response.json()
+      expect(error.code).toBe('VALIDATION_ERROR')
+      expect(error.details[0].path).toEqual(['assigneeId'])
+    }
+    expect(await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).toMatchObject({
+      assigneeId: alice.user.id,
+    })
+  })
+
+  test('rejects invalid bodies with 400 and changes nothing', async () => {
+    const { alice, acme, website } = await setup()
+    const task = await createTask(alice, acme.id, website.id, { title: 'Stable' })
+    const other = await createProject(alice, acme.id, { name: 'Other', key: 'OTH' })
+    const invalid = [
+      {},
+      { title: '' },
+      { title: '   ' },
+      { title: 'x'.repeat(201) },
+      { title: null },
+      { status: 'finished' },
+      { status: null },
+      { priority: 'urgent' },
+      { dueDate: 'tomorrow' },
+      { assigneeId: 'someone' },
+      { description: 'x'.repeat(10001) },
+      { projectId: other.id },
+      { number: 7 },
+      { creatorId: alice.user.id },
+      { organizationId: unknownId },
+    ]
+
+    for (const body of invalid) {
+      const response = await call(alice, 'PATCH', taskPath(acme.id, task.id), body)
+      expect(response.status, JSON.stringify(body)).toBe(400)
+      expect((await response.json()).error.code).toBe('VALIDATION_ERROR')
+    }
+    expect((await call(alice, 'PATCH', taskPath(acme.id, 'not-a-uuid'), { title: 'x' })).status).toBe(400)
+    expect(await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).toMatchObject({
+      title: 'Stable',
+      projectId: website.id,
+      number: 1,
+    })
+  })
+
+  test('answers 404 when updating or deleting a task that does not exist', async () => {
+    const { alice, acme } = await setup()
+
+    for (const [method, body] of [['PATCH', { title: 'x' }], ['DELETE', undefined]] as const) {
+      const response = await call(alice, method, taskPath(acme.id, unknownId), body)
+      expect(response.status, method).toBe(404)
+      expect((await response.json()).error.code).toBe('NOT_FOUND')
+    }
+  })
+
+  test('rejects updates and deletes in an archived project with 409 and allows them after unarchiving', async () => {
+    const { alice, acme, website } = await setup()
+    const task = await createTask(alice, acme.id, website.id, { title: 'Frozen' })
+    const projectPath = `/api/organizations/${acme.id}/projects/${website.id}`
+    await call(alice, 'PATCH', projectPath, { archived: true })
+
+    for (const [method, body] of [['PATCH', { title: 'Thawed' }], ['DELETE', undefined]] as const) {
+      const response = await call(alice, method, taskPath(acme.id, task.id), body)
+      expect(response.status, method).toBe(409)
+      expect((await response.json()).error.code).toBe('CONFLICT')
+    }
+    expect(await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).toMatchObject({ title: 'Frozen' })
+
+    await call(alice, 'PATCH', projectPath, { archived: false })
+    expect((await call(alice, 'PATCH', taskPath(acme.id, task.id), { title: 'Thawed' })).status).toBe(200)
+  })
+
+  test('deletes any task for an administrator and removes its comments', async () => {
+    const { alice, bob, acme, website } = await setup()
+    const task = await createTask(bob, acme.id, website.id, { title: 'Doomed' })
+    const kept = await createTask(bob, acme.id, website.id, { title: 'Kept' })
+    await prisma.comment.createMany({
+      data: [task, task, kept].map(({ id }) => ({
+        organizationId: acme.id,
+        taskId: id,
+        authorId: alice.user.id,
+        body: 'Note',
+      })),
+    })
+
+    const response = await call(alice, 'DELETE', taskPath(acme.id, task.id))
+
+    expect(response.status).toBe(204)
+    expect((await call(alice, 'GET', taskPath(acme.id, task.id))).status).toBe(404)
+    expect(await listTitles(alice, tasksPath(acme.id))).toEqual(['Kept'])
+    expect(await prisma.comment.count({ where: { taskId: task.id } })).toBe(0)
+    expect(await prisma.comment.count({ where: { taskId: kept.id } })).toBe(1)
+  })
+
+  test('lets a member delete only the tasks they created', async () => {
+    const { alice, bob, acme, website } = await setup()
+    const own = await createTask(bob, acme.id, website.id, { title: 'Bob made' })
+    const assigned = await createTask(alice, acme.id, website.id, { title: 'Bob works', assigneeId: bob.user.id })
+    const foreign = await createTask(alice, acme.id, website.id, { title: 'Alice only' })
+
+    for (const task of [assigned, foreign]) {
+      const response = await call(bob, 'DELETE', taskPath(acme.id, task.id))
+      expect(response.status, task.title).toBe(403)
+      expect((await response.json()).error.code).toBe('FORBIDDEN')
+    }
+    expect((await call(bob, 'DELETE', taskPath(acme.id, own.id))).status).toBe(204)
+
+    expect(await listTitles(alice, tasksPath(acme.id))).toEqual(['Alice only', 'Bob works'])
+  })
+
+  test('hides update and delete from users who are not members and changes nothing', async () => {
+    const { alice, acme, website } = await setup()
+    const mallory = await register('mallory@example.com')
+    const malloryOrganization = await createOrganization(mallory, 'Evil Corp')
+    const task = await createTask(alice, acme.id, website.id, { title: 'Secret' })
+    const before = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
+
+    const attempts: Array<[string, string, unknown?]> = [
+      ['PATCH', taskPath(acme.id, task.id), { title: 'Stolen' }],
+      ['DELETE', taskPath(acme.id, task.id)],
+      ['PATCH', taskPath(unknownId, task.id), { title: 'Ghost' }],
+      ['DELETE', taskPath('not-a-uuid', task.id)],
+      // Mallory administers her own organization, but the task is not in it.
+      ['PATCH', taskPath(malloryOrganization.id, task.id), { title: 'Smuggled' }],
+      ['DELETE', taskPath(malloryOrganization.id, task.id)],
+    ]
+    for (const [method, path, body] of attempts) {
+      const response = await call(mallory, method, path, body)
+      expect(response.status, `${method} ${path}`).toBe(404)
+      expect((await response.json()).error.code).toBe('NOT_FOUND')
+    }
+
+    expect(await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).toEqual(before)
+  })
+
   async function setup() {
     const alice = await register('alice@example.com')
     const bob = await register('bob@example.com')
@@ -537,6 +824,10 @@ describe('tasks', () => {
 
   function tasksPath(organizationId: string) {
     return `/api/organizations/${organizationId}/tasks`
+  }
+
+  function taskPath(organizationId: string, taskId: string) {
+    return `${tasksPath(organizationId)}/${taskId}`
   }
 
   function projectTasksPath(organizationId: string, projectId: string) {

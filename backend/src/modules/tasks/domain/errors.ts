@@ -1,4 +1,4 @@
-export type TasksFailureKind = 'not_found' | 'conflict' | 'invalid'
+export type TasksFailureKind = 'forbidden' | 'not_found' | 'conflict' | 'invalid'
 
 export class TasksFailure extends Error {
   constructor(
@@ -19,6 +19,14 @@ export function taskNotFound() {
 /** One answer for an unknown project and for a project of another organization. */
 export function projectNotFound() {
   return new TasksFailure('not_found', 'Project not found')
+}
+
+export function projectArchived() {
+  return new TasksFailure('conflict', 'Archived projects are read-only')
+}
+
+export function taskForbidden() {
+  return new TasksFailure('forbidden', 'You cannot change this task')
 }
 
 export function assigneeNotMember() {

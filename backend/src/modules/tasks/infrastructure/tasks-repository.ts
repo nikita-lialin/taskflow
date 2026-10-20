@@ -1,6 +1,6 @@
 import { containsText, type DbClient } from '../../../db'
 import type { Prisma } from '../../../generated/prisma/client'
-import type { TaskCreation, TaskFilter, TaskRecord, TasksRepository } from '../application/ports'
+import type { TaskFilter, TaskRecord, TasksRepository, TaskWrite } from '../application/ports'
 
 const userSelect = { id: true, email: true, displayName: true } as const
 
@@ -47,21 +47,34 @@ export function createPrismaTasksRepository(db: DbClient): TasksRepository {
       return row && toTaskRecord(row)
     },
 
-    withCreationLock(organizationId, run) {
+    withWriteLock(organizationId, run) {
       return db.$transaction(async (tx) => {
-        // A share lock lets creations run side by side. It still blocks membership changes and
+        // A share lock lets task writes run side by side. It still blocks membership changes and
         // project writes, which lock the row for update, so the assignee check and the archive
-        // check stay true until this task is stored.
+        // check stay true until the task is stored.
         const locked = await tx.$queryRaw<{ id: string }[]>`
           SELECT id FROM organizations WHERE id = ${organizationId}::uuid FOR SHARE`
         if (locked.length === 0) return null
 
-        const creation: TaskCreation = {
+        const write: TaskWrite = {
           findProject: (projectId) =>
             tx.project.findFirst({
               where: { id: projectId, organizationId },
               select: { id: true, archivedAt: true },
             }),
+          async findTask(taskId) {
+            const row = await tx.task.findFirst({
+              where: { id: taskId, organizationId },
+              select: { creatorId: true, assigneeId: true, project: { select: { archivedAt: true } } },
+            })
+            return (
+              row && {
+                creatorId: row.creatorId,
+                assigneeId: row.assigneeId,
+                projectArchived: row.project.archivedAt !== null,
+              }
+            )
+          },
           async isMember(userId) {
             const member = await tx.organizationMember.findUnique({
               where: { organizationId_userId: { organizationId, userId } },
@@ -82,8 +95,15 @@ export function createPrismaTasksRepository(db: DbClient): TasksRepository {
             })
             return toTaskRecord(row)
           },
+          async update(taskId, changes) {
+            const row = await tx.task.update({ where: { id: taskId }, data: changes, select: taskSelect })
+            return toTaskRecord(row)
+          },
+          async delete(taskId) {
+            await tx.task.delete({ where: { id: taskId } })
+          },
         }
-        return run(creation)
+        return run(write)
       })
     },
   }

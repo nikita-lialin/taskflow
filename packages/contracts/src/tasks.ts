@@ -28,7 +28,24 @@ export const createTaskRequestSchema = z
   })
   .strict()
 
-export const taskSortSchema = z.enum(['createdAt', 'updatedAt', 'dueDate', 'priority', 'status'])
+/**
+ * Any subset of the fields, at least one. `null` clears the nullable fields. The project is not
+ * editable, so `.strict()` rejects `projectId`.
+ */
+export const updateTaskRequestSchema = z
+  .object({
+    title: taskTitleSchema,
+    description: taskDescriptionSchema.nullable(),
+    status: taskStatusSchema,
+    priority: taskPrioritySchema,
+    assigneeId: z.uuid().nullable(),
+    dueDate: dueDateSchema.nullable(),
+  })
+  .partial()
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, 'Send at least one field to change')
+
+export const taskSortSchema =z.enum(['createdAt', 'updatedAt', 'dueDate', 'priority', 'status'])
 export const sortOrderSchema = z.enum(['asc', 'desc'])
 
 /** Accepts `?status=todo&status=done` and `?status=todo,done`. */
@@ -96,6 +113,7 @@ export const tasksResponseSchema = z
 export type TaskStatus = z.infer<typeof taskStatusSchema>
 export type TaskPriority = z.infer<typeof taskPrioritySchema>
 export type CreateTaskRequest = z.infer<typeof createTaskRequestSchema>
-export type TasksQuery = z.infer<typeof tasksQuerySchema>
+export type UpdateTaskRequest = z.infer<typeof updateTaskRequestSchema>
+export type TasksQuery =z.infer<typeof tasksQuerySchema>
 export type TaskDto = z.infer<typeof taskSchema>
 export type TaskUserDto = z.infer<typeof taskUserSchema>

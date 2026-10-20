@@ -3,16 +3,27 @@ import {
   MAX_PAGE,
   type TaskDto,
   type TasksQuery,
+  type UpdateTaskRequest,
 } from '@taskflow/contracts'
 
 import type { OrganizationMembership } from '../../organizations'
 import {
   assigneeNotMember,
+  projectArchived,
   projectNotFound,
   TasksFailure,
+  taskForbidden,
   taskNotFound,
 } from '../domain/errors'
-import type { TaskFilter, TaskRecord, TasksRepository, TaskUserRecord } from './ports'
+import { canDeleteTask, canEditTask } from '../domain/permissions'
+import type {
+  TaskChanges,
+  TaskFilter,
+  TaskRecord,
+  TasksRepository,
+  TaskUserRecord,
+  TaskWrite,
+} from './ports'
 
 type TasksServiceDependencies = {
   repository: TasksRepository
@@ -28,31 +39,50 @@ export class TasksService {
     projectId: string,
     input: CreateTaskRequest,
   ) {
-    const task = await this.dependencies.repository.withCreationLock(
-      membership.organizationId,
-      async (creation) => {
-        const project = await creation.findProject(projectId)
-        if (!project) throw projectNotFound()
-        if (input.assigneeId && !(await creation.isMember(input.assigneeId))) {
-          throw assigneeNotMember()
-        }
-        if (project.archivedAt) {
-          throw new TasksFailure('conflict', 'Archived projects are read-only')
-        }
-        return creation.create({
-          projectId,
-          creatorId: callerId,
-          title: input.title,
-          description: input.description || null,
-          status: input.status,
-          priority: input.priority,
-          assigneeId: input.assigneeId ?? null,
-          dueDate: input.dueDate ? new Date(input.dueDate) : null,
-        })
-      },
-    )
-    if (task === null) throw new TasksFailure('not_found', 'Organization not found')
+    const task = await this.write(membership, async (write) => {
+      const project = await write.findProject(projectId)
+      if (!project) throw projectNotFound()
+      if (input.assigneeId && !(await write.isMember(input.assigneeId))) throw assigneeNotMember()
+      if (project.archivedAt) throw projectArchived()
+      return write.create({
+        projectId,
+        creatorId: callerId,
+        title: input.title,
+        description: input.description || null,
+        status: input.status,
+        priority: input.priority,
+        assigneeId: input.assigneeId ?? null,
+        dueDate: input.dueDate ? new Date(input.dueDate) : null,
+      })
+    })
     return { task: toTaskDto(task) }
+  }
+
+  async update(
+    membership: OrganizationMembership,
+    callerId: string,
+    taskId: string,
+    input: UpdateTaskRequest,
+  ) {
+    const task = await this.write(membership, async (write) => {
+      const current = await write.findTask(taskId)
+      if (!current) throw taskNotFound()
+      if (!canEditTask(membership, callerId, current)) throw taskForbidden()
+      if (input.assigneeId && !(await write.isMember(input.assigneeId))) throw assigneeNotMember()
+      if (current.projectArchived) throw projectArchived()
+      return write.update(taskId, toChanges(input))
+    })
+    return { task: toTaskDto(task) }
+  }
+
+  async delete(membership: OrganizationMembership, callerId: string, taskId: string) {
+    await this.write(membership, async (write) => {
+      const current = await write.findTask(taskId)
+      if (!current) throw taskNotFound()
+      if (!canDeleteTask(membership, callerId, current)) throw taskForbidden()
+      if (current.projectArchived) throw projectArchived()
+      await write.delete(taskId)
+    })
   }
 
   async list(membership: OrganizationMembership, callerId: string, query: TasksQuery) {
@@ -75,6 +105,15 @@ export class TasksService {
     return { task: toTaskDto(task) }
   }
 
+  private async write<T>(
+    membership: OrganizationMembership,
+    run: (write: TaskWrite) => Promise<T>,
+  ): Promise<T> {
+    const result = await this.dependencies.repository.withWriteLock(membership.organizationId, run)
+    if (result === null) throw new TasksFailure('not_found', 'Organization not found')
+    return result
+  }
+
   private toFilter({ assigneeId, creatorId, overdue, ...rest }: TasksQuery, callerId: string): TaskFilter {
     return {
       ...rest,
@@ -84,6 +123,14 @@ export class TasksService {
       ...(creatorId !== undefined && { creatorId: creatorId === 'me' ? callerId : creatorId }),
       ...(overdue === 'true' && { overdueAt: this.dependencies.now() }),
     }
+  }
+}
+
+function toChanges({ description, dueDate, ...rest }: UpdateTaskRequest): TaskChanges {
+  return {
+    ...rest,
+    ...(description !== undefined && { description: description || null }),
+    ...(dueDate !== undefined && { dueDate: dueDate ? new Date(dueDate) : null }),
   }
 }
 

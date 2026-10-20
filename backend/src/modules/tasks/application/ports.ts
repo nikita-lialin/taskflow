@@ -42,25 +42,37 @@ export type TaskFilter = Omit<TasksQuery, 'assigneeId' | 'creatorId' | 'overdue'
   overdueAt?: Date
 }
 
+/** Only the fields that decide who may change a task, and whether its project is frozen. */
+export type TaskAccess = {
+  creatorId: string
+  assigneeId: string | null
+  projectArchived: boolean
+}
+
+export type TaskChanges = Partial<
+  Pick<NewTask, 'title' | 'description' | 'status' | 'priority' | 'assigneeId' | 'dueDate'>
+>
+
 export type ProjectState = {
   id: string
   archivedAt: Date | null
 }
 
 /** Operations that run while the organization row is share-locked. See the repository. */
-export type TaskCreation = {
+export type TaskWrite = {
   findProject(projectId: string): Promise<ProjectState | null>
+  findTask(taskId: string): Promise<TaskAccess | null>
   isMember(userId: string): Promise<boolean>
   /** Allocates the next number of the project and stores the task. */
   create(task: NewTask): Promise<TaskRecord>
+  update(taskId: string, changes: TaskChanges): Promise<TaskRecord>
+  /** Removes the task and, with it, its comments. */
+  delete(taskId: string): Promise<void>
 }
 
 export interface TasksRepository {
   list(organizationId: string, filter: TaskFilter): Promise<{ items: TaskRecord[]; total: number }>
   find(organizationId: string, taskId: string): Promise<TaskRecord | null>
   /** Resolves to `null` when the organization no longer exists. */
-  withCreationLock<T>(
-    organizationId: string,
-    run: (creation: TaskCreation) => Promise<T>,
-  ): Promise<T | null>
+  withWriteLock<T>(organizationId: string, run: (write: TaskWrite) => Promise<T>): Promise<T | null>
 }

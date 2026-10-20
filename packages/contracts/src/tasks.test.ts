@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 
-import { createTaskRequestSchema, tasksQuerySchema } from './index'
+import { createTaskRequestSchema, tasksQuerySchema, updateTaskRequestSchema } from './index'
 
 describe('task contracts', () => {
   test('fills defaults and trims text on create', () => {
@@ -9,6 +9,19 @@ describe('task contracts', () => {
       status: 'backlog',
       priority: 'medium',
     })
+  })
+
+  test('accepts any subset on update and clears nullable fields with null', () => {
+    expect(updateTaskRequestSchema.parse({ status: 'done' })).toEqual({ status: 'done' })
+    expect(updateTaskRequestSchema.parse({ description: null, assigneeId: null, dueDate: null })).toEqual({
+      description: null,
+      assigneeId: null,
+      dueDate: null,
+    })
+    expect(updateTaskRequestSchema.safeParse({}).success).toBe(false)
+    expect(updateTaskRequestSchema.safeParse({ title: null }).success).toBe(false)
+    expect(updateTaskRequestSchema.safeParse({ status: null }).success).toBe(false)
+    expect(updateTaskRequestSchema.safeParse({ projectId: '018f0000-0000-7000-8000-000000000000' }).success).toBe(false)
   })
 
   test('accepts repeated and comma-separated status and priority filters', () => {

@@ -7,6 +7,7 @@ import {
   taskResponseSchema,
   tasksQuerySchema,
   tasksResponseSchema,
+  updateTaskRequestSchema,
 } from '@taskflow/contracts'
 import { createRoute, OpenAPIHono } from '@hono/zod-openapi'
 import type { MiddlewareHandler } from 'hono'
@@ -70,6 +71,43 @@ const getTaskRoute = createRoute({
   },
 })
 
+const forbidden = {
+  content: errorContent,
+  description: 'Members change only the tasks they created or are assigned to',
+}
+const archived = { content: errorContent, description: 'The project is archived' }
+
+const updateTaskRoute = createRoute({
+  method: 'patch',
+  path: '/tasks/{taskId}',
+  security: bearerSecurity,
+  request: { params: taskParamsSchema, body: jsonBody(updateTaskRequestSchema) },
+  responses: {
+    ...ingressErrorResponses,
+    200: { content: { 'application/json': { schema: taskResponseSchema } }, description: 'Updated task' },
+    400: invalid,
+    401: unauthorized,
+    403: forbidden,
+    404: notFound,
+    409: archived,
+  },
+})
+
+const deleteTaskRoute = createRoute({
+  method: 'delete',
+  path: '/tasks/{taskId}',
+  security: bearerSecurity,
+  request: { params: taskParamsSchema },
+  responses: {
+    204: { description: 'Task deleted' },
+    400: invalid,
+    401: unauthorized,
+    403: { ...forbidden, description: 'Members delete only the tasks they created' },
+    404: notFound,
+    409: archived,
+  },
+})
+
 type CreateTasksRoutesOptions = {
   requireAuth: MiddlewareHandler<AuthHttpEnv>
   requireMembership: MiddlewareHandler<OrganizationHttpEnv>
@@ -103,6 +141,18 @@ export function createTasksRoutes({ requireAuth, requireMembership, service }: C
   routes.openapi(getTaskRoute, async (c) => {
     const { taskId } = c.req.valid('param')
     return c.json(await executeTasks(() => service.get(c.var.membership, taskId)), 200)
+  })
+  routes.openapi(updateTaskRoute, async (c) => {
+    const { taskId } = c.req.valid('param')
+    const result = await executeTasks(() =>
+      service.update(c.var.membership, c.var.user.id, taskId, c.req.valid('json')),
+    )
+    return c.json(result, 200)
+  })
+  routes.openapi(deleteTaskRoute, async (c) => {
+    const { taskId } = c.req.valid('param')
+    await executeTasks(() => service.delete(c.var.membership, c.var.user.id, taskId))
+    return c.body(null, 204)
   })
 
   return routes
