@@ -1,6 +1,7 @@
 import { expect, signUp, test, uniqueEmail } from '../helpers/test'
 import {
   boardColumn,
+  dragCardToColumn,
   createOrganization,
   createProject,
   createTask,
@@ -30,16 +31,16 @@ test('a new user creates an organization, a project, and a task, moves it, and c
   await expect(backlog.getByTestId('board-card').filter({ hasText: taskTitle })).toBeVisible()
   await expect(backlog.getByText('WEB-1')).toBeVisible()
 
-  // Change the status from the card. The card moves to the matching column.
-  await backlog
-    .getByTestId('board-card')
-    .filter({ hasText: taskTitle })
-    .getByTestId('task-status-select')
-    .selectOption('in_progress')
+  // Drag the card to another column. It moves at once and stays there after a reload.
+  await dragCardToColumn(page, backlog.getByTestId('board-card').filter({ hasText: taskTitle }), 'in_progress')
   await expect(
     boardColumn(page, 'in_progress').getByTestId('board-card').filter({ hasText: taskTitle }),
   ).toBeVisible()
   await expect(backlog.getByTestId('board-card')).toHaveCount(0)
+  await page.reload()
+  await expect(
+    boardColumn(page, 'in_progress').getByTestId('board-card').filter({ hasText: taskTitle }),
+  ).toBeVisible()
 
   // Open the task, add a comment, and read it back after a reload.
   await boardColumn(page, 'in_progress').getByTestId('task-link').click()
@@ -55,11 +56,34 @@ test('a new user creates an organization, a project, and a task, moves it, and c
   await page.reload()
   await expect(comment).toBeVisible()
 
-  // Edit the fields on the detail page and find the task in the list and in "My tasks".
+  // The window saves by itself: selects at once, the description when typing stops.
+  const saveState = page.getByTestId('task-save-state')
   await page.getByTestId('task-assignee').selectOption({ index: 1 })
   await page.getByTestId('task-priority').selectOption('high')
-  await page.getByTestId('task-save').click()
-  await expect(page.getByTestId('task-saved')).toBeVisible()
+  await expect(saveState).toHaveAttribute('data-state', 'saved')
+  await page.getByTestId('task-description').fill('Written in the browser test')
+  await page.getByTestId('task-description').blur()
+  await expect(saveState).toHaveAttribute('data-state', 'saved')
+  await page.reload()
+  await expect(page.getByTestId('task-description')).toHaveValue('Written in the browser test')
+  await expect(page.getByTestId('task-priority')).toHaveValue('high')
+
+  // The journal lists the drag, the edits, and the creation, with the person who made them.
+  await page.getByTestId('task-tab-activity').click()
+  const entries = page.getByTestId('task-activity-entry')
+  await expect(entries.filter({ hasText: 'changed the priority from Medium to High' })).toBeVisible()
+  await expect(entries.filter({ hasText: 'moved the task from Backlog to In Progress' })).toBeVisible()
+  await expect(entries.filter({ hasText: 'changed the description' })).toBeVisible()
+  await expect(entries.filter({ hasText: 'created this task' })).toBeVisible()
+
+  // Closing the window returns to the board, and Forward opens it again.
+  await page.keyboard.press('Escape')
+  await expect(page).toHaveURL(/\/board$/)
+  await expect(page.getByTestId('task-dialog')).toHaveCount(0)
+  await page.goForward()
+  await expect(page.getByTestId('task-dialog')).toBeVisible()
+  await page.goBack()
+  await expect(page.getByTestId('task-dialog')).toHaveCount(0)
 
   await page.getByTestId('org-nav-tasks').click()
   await expect(page.getByTestId('task-row').filter({ hasText: taskTitle })).toBeVisible()
@@ -69,6 +93,14 @@ test('a new user creates an organization, a project, and a task, moves it, and c
 
   await page.getByTestId('org-nav-my-tasks').click()
   await expect(page.getByTestId('task-row').filter({ hasText: taskTitle })).toBeVisible()
+
+  // Deleting asks first, closes the window, and removes the card.
+  await page.getByTestId('org-nav-board').click()
+  await boardColumn(page, 'in_progress').getByTestId('task-link').click()
+  await page.getByTestId('task-delete').click()
+  await page.getByTestId('task-delete-confirm').click()
+  await expect(page.getByTestId('task-dialog')).toHaveCount(0)
+  await expect(page.getByTestId('board-card')).toHaveCount(0)
 })
 
 test('a user from another organization cannot reach the first organization', async ({
@@ -151,22 +183,23 @@ test('a member sees only the actions the role allows', async ({ browser, page })
   await memberPage.getByTestId('org-nav-board').click()
   const adminCard = memberPage.getByTestId('board-card').filter({ hasText: adminTask })
   await expect(adminCard).toBeVisible()
-  await expect(adminCard.getByTestId('task-status-select')).toHaveCount(0)
+  await expect(adminCard.getByTestId('board-card-handle')).toHaveCount(0)
   await adminCard.getByTestId('task-link').click()
   await expect(memberPage.getByTestId('task-title')).toBeDisabled()
-  await expect(memberPage.getByTestId('task-save')).toHaveCount(0)
   await expect(memberPage.getByTestId('task-delete')).toHaveCount(0)
   // Everyone in the organization can comment.
   await memberPage.getByTestId('comment-input').fill('Question from the member')
   await memberPage.getByTestId('comment-submit').click()
   await expect(memberPage.getByTestId('comment').filter({ hasText: 'Question from the member' })).toBeVisible()
 
+  await memberPage.keyboard.press('Escape')
   await createTask(memberPage, memberTask)
   const ownCard = memberPage.getByTestId('board-card').filter({ hasText: memberTask })
-  await expect(ownCard.getByTestId('task-status-select')).toHaveCount(1)
+  await expect(ownCard.getByTestId('board-card-handle')).toHaveCount(1)
   await ownCard.getByTestId('task-link').click()
   await expect(memberPage.getByTestId('task-title')).toBeEnabled()
   await expect(memberPage.getByTestId('task-delete')).toHaveCount(1)
+  await memberPage.keyboard.press('Escape')
 
   // The admin can delete the comment of the member, and the member cannot touch the admin's task.
   await page.getByTestId('org-nav-board').click()

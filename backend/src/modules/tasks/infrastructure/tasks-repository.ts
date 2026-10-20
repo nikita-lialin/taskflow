@@ -47,6 +47,35 @@ export function createPrismaTasksRepository(db: DbClient): TasksRepository {
       return row && toTaskRecord(row)
     },
 
+    async listActivity(organizationId, taskId, { page, pageSize }) {
+      const task = await db.task.findFirst({ where: { id: taskId, organizationId }, select: { id: true } })
+      if (!task) return null
+      const where = { taskId, organizationId }
+      const [total, rows] = await db.$transaction([
+        db.taskActivity.count({ where }),
+        db.taskActivity.findMany({
+          where,
+          // Entries of one update share a time. The id keeps them in the order they were made.
+          orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+          skip: (page - 1) * pageSize,
+          take: pageSize,
+          select: {
+            id: true,
+            taskId: true,
+            type: true,
+            fromValue: true,
+            toValue: true,
+            createdAt: true,
+            actor: { select: userSelect },
+          },
+        }),
+      ])
+      return {
+        items: rows.map(({ fromValue, toValue, ...row }) => ({ ...row, from: fromValue, to: toValue })),
+        total,
+      }
+    },
+
     withWriteLock(organizationId, run) {
       return db.$transaction(async (tx) => {
         // A share lock lets task writes run side by side. It still blocks membership changes and
@@ -65,13 +94,31 @@ export function createPrismaTasksRepository(db: DbClient): TasksRepository {
           async findTask(taskId) {
             const row = await tx.task.findFirst({
               where: { id: taskId, organizationId },
-              select: { creatorId: true, assigneeId: true, project: { select: { archivedAt: true } } },
+              select: {
+                creatorId: true,
+                assigneeId: true,
+                title: true,
+                description: true,
+                status: true,
+                priority: true,
+                dueDate: true,
+                assignee: { select: userSelect },
+                project: { select: { archivedAt: true } },
+              },
             })
             return (
               row && {
                 creatorId: row.creatorId,
                 assigneeId: row.assigneeId,
                 projectArchived: row.project.archivedAt !== null,
+                snapshot: {
+                  title: row.title,
+                  description: row.description,
+                  status: row.status,
+                  priority: row.priority,
+                  assignee: row.assignee,
+                  dueDate: row.dueDate,
+                },
               }
             )
           },
@@ -98,6 +145,18 @@ export function createPrismaTasksRepository(db: DbClient): TasksRepository {
           async update(taskId, changes) {
             const row = await tx.task.update({ where: { id: taskId }, data: changes, select: taskSelect })
             return toTaskRecord(row)
+          },
+          async recordActivity(taskId, actorId, entries) {
+            await tx.taskActivity.createMany({
+              data: entries.map(({ type, from, to }) => ({
+                organizationId,
+                taskId,
+                actorId,
+                type,
+                fromValue: from,
+                toValue: to,
+              })),
+            })
           },
           async delete(taskId) {
             await tx.task.delete({ where: { id: taskId } })

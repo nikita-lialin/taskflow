@@ -1,4 +1,12 @@
-import type { TaskPriority, TaskStatus, TasksQuery } from '@taskflow/contracts'
+import type {
+  TaskActivityQuery,
+  TaskActivityType,
+  TaskPriority,
+  TasksQuery,
+  TaskStatus,
+} from '@taskflow/contracts'
+
+import type { ActivityEntry, TaskSnapshot } from '../domain/activity'
 
 export type TaskUserRecord = {
   id: string
@@ -42,11 +50,25 @@ export type TaskFilter = Omit<TasksQuery, 'assigneeId' | 'creatorId' | 'overdue'
   overdueAt?: Date
 }
 
-/** Only the fields that decide who may change a task, and whether its project is frozen. */
+/**
+ * The fields that decide who may change a task, and whether its project is frozen, with the values
+ * the journal compares an update against.
+ */
 export type TaskAccess = {
   creatorId: string
   assigneeId: string | null
   projectArchived: boolean
+  snapshot: TaskSnapshot
+}
+
+export type TaskActivityRecord = {
+  id: string
+  taskId: string
+  type: TaskActivityType
+  actor: TaskUserRecord
+  from: string | null
+  to: string | null
+  createdAt: Date
 }
 
 export type TaskChanges = Partial<
@@ -66,13 +88,21 @@ export type TaskWrite = {
   /** Allocates the next number of the project and stores the task. */
   create(task: NewTask): Promise<TaskRecord>
   update(taskId: string, changes: TaskChanges): Promise<TaskRecord>
-  /** Removes the task and, with it, its comments. */
+  /** Adds journal entries for one task, all made by one person at one moment. */
+  recordActivity(taskId: string, actorId: string, entries: ActivityEntry[]): Promise<void>
+  /** Removes the task and, with it, its comments and journal. */
   delete(taskId: string): Promise<void>
 }
 
 export interface TasksRepository {
   list(organizationId: string, filter: TaskFilter): Promise<{ items: TaskRecord[]; total: number }>
   find(organizationId: string, taskId: string): Promise<TaskRecord | null>
+  /** Newest first. Resolves to `null` when the task is not in the organization. */
+  listActivity(
+    organizationId: string,
+    taskId: string,
+    query: TaskActivityQuery,
+  ): Promise<{ items: TaskActivityRecord[]; total: number } | null>
   /** Resolves to `null` when the organization no longer exists. */
   withWriteLock<T>(organizationId: string, run: (write: TaskWrite) => Promise<T>): Promise<T | null>
 }

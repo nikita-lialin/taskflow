@@ -22,6 +22,7 @@ model User {
   createdTasks        Task[]               @relation("TaskCreator")
   assignedTasks       Task[]               @relation("TaskAssignee")
   comments            Comment[]
+  taskActivity        TaskActivity[]
 
   @@index([role], map: "users_role_idx")
   @@map("users")

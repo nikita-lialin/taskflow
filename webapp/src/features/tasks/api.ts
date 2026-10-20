@@ -1,10 +1,13 @@
 import {
   createTaskRequestSchema,
+  taskActivityQuerySchema,
+  taskActivityResponseSchema,
   taskResponseSchema,
   tasksQuerySchema,
   tasksResponseSchema,
   updateTaskRequestSchema,
   type CreateTaskRequest,
+  type TaskActivityQuery,
   type TasksQuery,
   type UpdateTaskRequest,
 } from '@taskflow/contracts'
@@ -28,6 +31,21 @@ export function listTasks(
   return transport.request(
     `${organizationPath(organizationId)}/tasks${buildQueryString(query)}`,
     tasksResponseSchema,
+    options,
+  )
+}
+
+export function listTaskActivity(
+  transport: AuthenticatedTransport,
+  organizationId: string,
+  taskId: string,
+  input: Partial<TaskActivityQuery>,
+  options: ReadOptions = {},
+) {
+  const query = taskActivityQuerySchema.parse(input)
+  return transport.request(
+    `${organizationPath(organizationId)}/tasks/${encodeURIComponent(taskId)}/activity${buildQueryString(query)}`,
+    taskActivityResponseSchema,
     options,
   )
 }

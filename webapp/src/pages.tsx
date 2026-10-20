@@ -27,7 +27,7 @@ import {
   OrganizationScope,
 } from '@/features/organizations'
 import { ProjectsPage } from '@/features/projects'
-import { TaskBoard, TaskDetailPage, TaskListPage } from '@/features/tasks'
+import { TaskBoard, TaskDetailDialog, TaskListPage } from '@/features/tasks'
 import { UserProfile, UserSettings } from '@/features/users'
 
 export function HomePage() {
@@ -121,10 +121,12 @@ export function OrganizationIndexPage() {
   )
 }
 
-export function BoardPage() {
+// The board stays mounted while a task window is open over it, so its filters survive the window.
+export function BoardLayoutPage() {
   return (
     <OrganizationRoute>
       <TaskBoard />
+      <Outlet />
     </OrganizationRoute>
   )
 }
@@ -147,11 +149,7 @@ export function MyTasksPage() {
 
 export function TaskPage() {
   const { taskId } = useParams({ strict: false })
-  return (
-    <OrganizationRoute>
-      <TaskDetailPage key={taskId} taskId={taskId ?? ''} />
-    </OrganizationRoute>
-  )
+  return <TaskDetailDialog key={taskId} taskId={taskId ?? ''} />
 }
 
 export function ProjectsRoutePage() {

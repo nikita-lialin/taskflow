@@ -3,15 +3,19 @@ import type { TaskDto } from '@taskflow/contracts'
 
 import { commentPermissions, isEdited, lastCommentPage } from '../src/features/comments/model'
 import {
+  addTaskToPage,
+  applyPendingUpdates,
   buildTaskUpdate,
   dueDateToIso,
   emptyTaskFilters,
   hasActiveFilters,
   isOverdue,
   isoToDueDateInput,
+  removeTaskFromPage,
   taskPermissions,
   tasksQueryFromFilters,
   taskToFormValues,
+  userInitials,
 } from '../src/features/tasks/model'
 
 const creator = { displayName: 'Creator', email: 'creator@example.com', id: 'creator' }
@@ -174,4 +178,62 @@ test('clearing the description, assignee, or due date sends null', () => {
     description: null,
     dueDate: null,
   })
+})
+
+function page(items: TaskDto[], total = items.length) {
+  return { hasNext: false, items, page: 1, pageSize: 50, total }
+}
+
+test('removing a task drops it from the column and lowers the total', () => {
+  const kept = task({ id: 'task-2' })
+  const result = removeTaskFromPage(page([task(), kept], 7), 'task-1')
+
+  expect(result.items).toEqual([kept])
+  expect(result.total).toBe(6)
+})
+
+test('removing a task that is not in the column changes nothing', () => {
+  const column = page([task()], 7)
+
+  expect(removeTaskFromPage(column, 'other')).toBe(column)
+})
+
+test('adding a task puts it first with its new status and raises the total', () => {
+  const existing = task({ id: 'task-2', status: 'done' })
+  const result = addTaskToPage(page([existing]), task(), 'done')
+
+  expect(result.items.map((item) => item.id)).toEqual(['task-1', 'task-2'])
+  expect(result.items[0]?.status).toBe('done')
+  expect(result.total).toBe(2)
+})
+
+test('adding a task that is already in the column does not duplicate it', () => {
+  const column = page([task({ status: 'done' })])
+
+  expect(addTaskToPage(column, task(), 'done')).toBe(column)
+})
+
+test('initials come from the name, or from the email when there is no name', () => {
+  expect(userInitials({ displayName: 'Ada Lovelace', email: 'ada@example.com' })).toBe('AL')
+  expect(userInitials({ displayName: 'Plato', email: 'plato@example.com' })).toBe('P')
+  expect(userInitials({ displayName: null, email: 'grace.hopper@example.com' })).toBe('G')
+})
+
+test('saves that are still in flight show their values before the server answers', () => {
+  const values = taskToFormValues(task({ dueDate: dueDateToIso('2026-03-05') }))
+  const shown = applyPendingUpdates(values, [
+    { status: 'done' },
+    { assigneeId: null, dueDate: null },
+    { description: null, priority: 'high', title: 'Renamed' },
+  ])
+
+  expect(shown).toEqual({
+    assigneeId: '',
+    description: '',
+    dueDate: '',
+    priority: 'high',
+    status: 'done',
+    title: 'Renamed',
+  })
+  expect(applyPendingUpdates(values, [])).toBe(values)
 })

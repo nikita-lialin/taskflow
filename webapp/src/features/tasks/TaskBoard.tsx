@@ -1,43 +1,99 @@
-import { Link } from '@tanstack/react-router'
-import type { TaskDto, TaskStatus } from '@taskflow/contracts'
-import { useState } from 'react'
+import {
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  MouseSensor,
+  TouchSensor,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type Active,
+  type Announcements,
+  type DragEndEvent,
+  type DragStartEvent,
+} from '@dnd-kit/core'
+import { taskSchema, taskStatusSchema, type TaskDto, type TaskStatus } from '@taskflow/contracts'
+import { useCallback, useState } from 'react'
 
 import { PageContainer, PageHeader } from '@/components/PageLayout'
 import { LoadingRows, MutationErrorAlert, QueryErrorAlert } from '@/components/QueryStates'
 import { Typography } from '@/components/typography'
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { useOrganization } from '@/features/organizations'
+import { BoardCard, BoardCardPreview } from './BoardCard'
 import { useMemberOptions, useProjectIndex } from './hooks'
 import {
   emptyTaskFilters,
   TASK_STATUSES,
-  taskPermissions,
   taskStatusLabels,
   tasksQueryFromFilters,
-  userLabel,
   type TaskFilters,
 } from './model'
 import { NewTaskAction } from './NewTaskAction'
-import { useTasksQuery, useUpdateTaskMutation } from './queries'
-import {
-  TaskDueDateBadge,
-  TaskFiltersBar,
-  TaskPriorityBadge,
-  TaskStatusSelect,
-} from './TaskParts'
-import { useAuth } from '@/features/auth'
+import { useMoveTaskMutation, useTasksQuery } from './queries'
+import { TaskFiltersBar } from './TaskParts'
 
 /** Cards one column loads. Longer columns point to the task list. */
 const COLUMN_SIZE = 50
 
+const columnPaging = { order: 'desc', page: 1, pageSize: COLUMN_SIZE, sort: 'updatedAt' } as const
+
+/** The task a drag carries. The drag data is untyped, so it is checked here. */
+function draggedTask(active: Active): TaskDto | null {
+  const parsed = taskSchema.safeParse(active.data.current?.task)
+  return parsed.success ? parsed.data : null
+}
+
+function overStatus(over: { id: string | number } | null) {
+  const parsed = taskStatusSchema.safeParse(over?.id)
+  return parsed.success ? parsed.data : null
+}
+
+// Screen readers hear the task key and the column name instead of internal ids.
+const announcements: Announcements = {
+  onDragCancel: ({ active }) => `Moving ${draggedTask(active)?.key ?? 'the task'} was cancelled.`,
+  onDragEnd: ({ active, over }) => {
+    const status = overStatus(over)
+    return status
+      ? `${draggedTask(active)?.key ?? 'The task'} was dropped in ${taskStatusLabels[status]}.`
+      : `${draggedTask(active)?.key ?? 'The task'} was dropped outside the columns.`
+  },
+  onDragMove: () => undefined,
+  onDragOver: ({ active, over }) => {
+    const status = overStatus(over)
+    return status ? `${draggedTask(active)?.key ?? 'The task'} is over ${taskStatusLabels[status]}.` : undefined
+  },
+  onDragStart: ({ active }) => `Picked up ${draggedTask(active)?.key ?? 'the task'}.`,
+}
+
 export function TaskBoard() {
   const { organization } = useOrganization()
   const [filters, setFilters] = useState<TaskFilters>(emptyTaskFilters)
+  const [dragging, setDragging] = useState<TaskDto | null>(null)
   const { archivedIds, projects } = useProjectIndex(organization.id)
   const { members } = useMemberOptions(organization.id)
-  const updateMutation = useUpdateTaskMutation(organization.id)
-  const movingTaskId = updateMutation.isPending ? (updateMutation.variables?.taskId ?? null) : null
+  const columnQuery = useCallback(
+    (status: TaskStatus) => tasksQueryFromFilters({ ...filters, status }, columnPaging),
+    [filters],
+  )
+  const moveMutation = useMoveTaskMutation(organization.id, columnQuery)
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 8 } }),
+    useSensor(KeyboardSensor),
+  )
+
+  const handleDragStart = ({ active }: DragStartEvent) => {
+    moveMutation.reset()
+    setDragging(draggedTask(active))
+  }
+
+  const handleDragEnd = ({ active, over }: DragEndEvent) => {
+    setDragging(null)
+    const task = draggedTask(active)
+    const status = overStatus(over)
+    if (task && status && status !== task.status) moveMutation.mutate({ status, task })
+  }
 
   return (
     <PageContainer>
@@ -48,153 +104,97 @@ export function TaskBoard() {
             organizationId={organization.id}
           />
         }
-        description="Follow the work from backlog to done. Change a status from the card."
+        description="Follow the work from backlog to done. Drag a card to change its status."
         title="Board"
       />
-      <TaskFiltersBar filters={filters} members={members} onChange={setFilters} projects={projects} />
-      <MutationErrorAlert error={updateMutation.error} title="Status was not changed" />
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4" data-testid="task-board">
-        {TASK_STATUSES.map((status) => (
-          <BoardColumn
-            archivedProjectIds={archivedIds}
-            filters={filters}
-            key={status}
-            movingTaskId={movingTaskId}
-            onMove={(task, nextStatus) => {
-              updateMutation.reset()
-              updateMutation.mutate({ input: { status: nextStatus }, taskId: task.id })
-            }}
-            organizationId={organization.id}
-            status={status}
-          />
-        ))}
-      </div>
+      <TaskFiltersBar
+        filters={filters}
+        members={members}
+        onChange={setFilters}
+        projects={projects}
+        showSearch
+      />
+      <MutationErrorAlert error={moveMutation.error} title="Task was not moved" />
+      <DndContext
+        accessibility={{ announcements }}
+        onDragCancel={() => setDragging(null)}
+        onDragEnd={handleDragEnd}
+        onDragStart={handleDragStart}
+        sensors={sensors}
+      >
+        <div
+          className="grid auto-cols-[minmax(16rem,1fr)] grid-flow-col items-start gap-4 overflow-x-auto pb-2"
+          data-testid="task-board"
+        >
+          {TASK_STATUSES.map((status) => (
+            <BoardColumn
+              archivedProjectIds={archivedIds}
+              key={status}
+              organizationId={organization.id}
+              query={columnQuery(status)}
+              status={status}
+            />
+          ))}
+        </div>
+        <DragOverlay>{dragging && <BoardCardPreview task={dragging} />}</DragOverlay>
+      </DndContext>
     </PageContainer>
   )
 }
 
 function BoardColumn({
   archivedProjectIds,
-  filters,
-  movingTaskId,
-  onMove,
   organizationId,
+  query,
   status,
 }: {
   archivedProjectIds: ReadonlySet<string>
-  filters: TaskFilters
-  movingTaskId: string | null
-  onMove: (task: TaskDto, status: TaskStatus) => void
   organizationId: string
+  query: ReturnType<typeof tasksQueryFromFilters>
   status: TaskStatus
 }) {
-  const tasks = useTasksQuery(
-    organizationId,
-    tasksQueryFromFilters(
-      { ...filters, status },
-      { order: 'desc', page: 1, pageSize: COLUMN_SIZE, sort: 'updatedAt' },
-    ),
-  )
+  const tasks = useTasksQuery(organizationId, query)
+  const { isOver, setNodeRef } = useDroppable({ id: status })
 
   return (
-    <section aria-labelledby={`column-${status}`} data-status={status} data-testid="board-column">
-      <Card className="bg-muted/30">
-        <CardHeader>
-          <div className="flex items-center justify-between gap-2">
-            <Typography as="h2" id={`column-${status}`} variant="h6">
-              {taskStatusLabels[status]}
-            </Typography>
-            <Badge data-testid="board-column-count" variant="outline">
-              {tasks.data?.total ?? '–'}
-            </Badge>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-3">
-            {tasks.isPending && <LoadingRows label={`Loading ${taskStatusLabels[status]}`} rows={2} />}
-            {tasks.isError && (
-              <QueryErrorAlert
-                error={tasks.error}
-                onRetry={() => void tasks.refetch()}
-                title="Column is unavailable"
-              />
-            )}
-            {tasks.data && tasks.data.items.length === 0 && (
-              <Typography data-testid="board-column-empty" tone="muted" variant="bodySm">
-                No tasks here.
-              </Typography>
-            )}
-            {tasks.data?.items.map((task) => (
-              <BoardCard
-                isMoving={movingTaskId === task.id}
-                key={task.id}
-                onMove={onMove}
-                projectArchived={archivedProjectIds.has(task.projectId)}
-                task={task}
-              />
-            ))}
-            {tasks.data?.hasNext && (
-              <Typography tone="muted" variant="caption">
-                {`Showing ${tasks.data.items.length} of ${tasks.data.total}. Open the task list to see all.`}
-              </Typography>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-    </section>
-  )
-}
-
-function BoardCard({
-  isMoving,
-  onMove,
-  projectArchived,
-  task,
-}: {
-  isMoving: boolean
-  onMove: (task: TaskDto, status: TaskStatus) => void
-  projectArchived: boolean
-  task: TaskDto
-}) {
-  const { organization } = useOrganization()
-  const viewer = useAuth().user
-  const permissions = viewer
-    ? taskPermissions({
-        projectArchived,
-        task,
-        viewerId: viewer.id,
-        viewerRole: organization.role,
-      })
-    : null
-
-  return (
-    <article className="grid gap-3 rounded-lg border bg-card p-3" data-testid="board-card">
-      <div className="grid gap-1">
-        <Typography tone="muted" variant="caption">
-          {task.key}
+    <section
+      aria-labelledby={`column-${status}`}
+      className={`grid min-h-64 content-start gap-3 rounded-xl border p-3 transition-colors ${isOver ? 'bg-accent' : 'bg-muted/30'}`}
+      data-status={status}
+      data-testid="board-column"
+      ref={setNodeRef}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <Typography as="h2" id={`column-${status}`} variant="h6">
+          {taskStatusLabels[status]}
         </Typography>
-        <Typography asChild variant="bodySmMedium" wrap="break">
-          <Link
-            data-testid="task-link"
-            params={{ organizationId: organization.id, taskId: task.id }}
-            to="/app/orgs/$organizationId/tasks/$taskId"
-          >
-            {task.title}
-          </Link>
-        </Typography>
+        <Badge data-testid="board-column-count" variant="outline">
+          {tasks.data?.total ?? '–'}
+        </Badge>
       </div>
-      <div className="flex flex-wrap items-center gap-1.5">
-        <TaskPriorityBadge priority={task.priority} />
-        <TaskDueDateBadge task={task} />
-        {task.assignee && <Badge variant="outline">{userLabel(task.assignee)}</Badge>}
-      </div>
-      {permissions?.canEdit && (
-        <TaskStatusSelect
-          disabled={isMoving}
-          onChange={(status) => onMove(task, status)}
-          task={task}
+      {tasks.isPending && <LoadingRows label={`Loading ${taskStatusLabels[status]}`} rows={2} />}
+      {tasks.isError && (
+        <QueryErrorAlert
+          error={tasks.error}
+          onRetry={() => void tasks.refetch()}
+          title="Column is unavailable"
         />
       )}
-    </article>
+      {tasks.data && tasks.data.items.length === 0 && (
+        <div className="rounded-lg border border-dashed p-4 text-center">
+          <Typography data-testid="board-column-empty" tone="muted" variant="bodySm">
+            No tasks here.
+          </Typography>
+        </div>
+      )}
+      {tasks.data?.items.map((task) => (
+        <BoardCard key={task.id} projectArchived={archivedProjectIds.has(task.projectId)} task={task} />
+      ))}
+      {tasks.data?.hasNext && (
+        <Typography tone="muted" variant="caption">
+          {`Showing ${tasks.data.items.length} of ${tasks.data.total}. Open the task list to see all.`}
+        </Typography>
+      )}
+    </section>
   )
 }

@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 
 export function uniqueName(prefix: string) {
   return `${prefix} ${Math.random().toString(36).slice(2, 8)}`
@@ -40,4 +40,20 @@ export async function createTask(page: Page, title: string) {
 
 export function boardColumn(page: Page, status: 'backlog' | 'todo' | 'in_progress' | 'done') {
   return page.locator(`[data-testid="board-column"][data-status="${status}"]`)
+}
+
+/** Drags a card to a column with the mouse. The board starts a drag after the pointer moves. */
+export async function dragCardToColumn(
+  page: Page,
+  card: Locator,
+  status: 'backlog' | 'todo' | 'in_progress' | 'done',
+) {
+  const from = await card.boundingBox()
+  const to = await boardColumn(page, status).boundingBox()
+  if (!from || !to) throw new Error('The card or the column is not visible')
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(from.x + from.width / 2 + 12, from.y + from.height / 2 + 12, { steps: 4 })
+  await page.mouse.move(to.x + to.width / 2, to.y + 80, { steps: 12 })
+  await page.mouse.up()
 }

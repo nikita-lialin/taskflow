@@ -3,6 +3,8 @@ import {
   createTaskRequestSchema,
   organizationParamsSchema,
   projectTasksParamsSchema,
+  taskActivityQuerySchema,
+  taskActivityResponseSchema,
   taskParamsSchema,
   taskResponseSchema,
   tasksQuerySchema,
@@ -65,6 +67,22 @@ const getTaskRoute = createRoute({
   request: { params: taskParamsSchema },
   responses: {
     200: { content: { 'application/json': { schema: taskResponseSchema } }, description: 'Task' },
+    400: invalid,
+    401: unauthorized,
+    404: notFound,
+  },
+})
+
+const taskActivityRoute = createRoute({
+  method: 'get',
+  path: '/tasks/{taskId}/activity',
+  security: bearerSecurity,
+  request: { params: taskParamsSchema, query: taskActivityQuerySchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: taskActivityResponseSchema } },
+      description: 'Changes of the task, newest first',
+    },
     400: invalid,
     401: unauthorized,
     404: notFound,
@@ -142,6 +160,13 @@ export function createTasksRoutes({ requireAuth, requireMembership, service }: C
   routes.openapi(getTaskRoute, async (c) => {
     const { taskId } = c.req.valid('param')
     return c.json(await executeTasks(() => service.get(c.var.membership, taskId)), 200)
+  })
+  routes.openapi(taskActivityRoute, async (c) => {
+    const { taskId } = c.req.valid('param')
+    const result = await executeTasks(() =>
+      service.activity(c.var.membership, taskId, c.req.valid('query')),
+    )
+    return c.json(result, 200)
   })
   routes.openapi(updateTaskRoute, async (c) => {
     const { taskId } = c.req.valid('param')

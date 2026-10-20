@@ -813,6 +813,138 @@ describe('tasks', () => {
     expect(await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).toEqual(before)
   })
 
+  test('records who created the task in its activity', async () => {
+    const { alice, bob, acme, website } = await setup()
+    const task = await createTask(bob, acme.id, website.id, { title: 'First' })
+
+    // Any member reads the journal, not only people who may edit the task.
+    const { items, total } = await listActivity(alice, acme.id, task.id)
+
+    expect(total).toBe(1)
+    expect(items).toEqual([
+      {
+        id: expect.any(String),
+        taskId: task.id,
+        type: 'created',
+        actor: { id: bob.user.id, email: bob.user.email, displayName: null },
+        from: null,
+        to: null,
+        createdAt: expect.any(String),
+      },
+    ])
+  })
+
+  test('records one entry per changed field, newest first, with the old and new values', async () => {
+    const { alice, bob, acme, website } = await setup()
+    const task = await createTask(alice, acme.id, website.id, {
+      title: 'Plan',
+      priority: 'low',
+      assigneeId: bob.user.id,
+      dueDate: '2030-01-15T10:00:00.000Z',
+    })
+
+    await call(alice, 'PATCH', taskPath(acme.id, task.id), { status: 'in_progress' })
+    await call(alice, 'PATCH', taskPath(acme.id, task.id), {
+      title: 'Plan v2',
+      description: 'Details',
+      priority: 'high',
+      assigneeId: null,
+      dueDate: '2030-02-01T10:00:00.000Z',
+    })
+
+    const { items } = await listActivity(alice, acme.id, task.id)
+
+    expect(items.map(({ type, from, to }) => [type, from, to])).toEqual([
+      ['title_changed', 'Plan', 'Plan v2'],
+      ['description_changed', null, null],
+      ['priority_changed', 'low', 'high'],
+      ['assignee_changed', 'bob@example.com', null],
+      ['due_date_changed', '2030-01-15T10:00:00.000Z', '2030-02-01T10:00:00.000Z'],
+      ['status_changed', 'backlog', 'in_progress'],
+      ['created', null, null],
+    ])
+    expect(items.every((item) => item.actor.id === alice.user.id)).toBe(true)
+  })
+
+  test('names the assignee by display name when there is one', async () => {
+    const { alice, bob, acme, website } = await setup()
+    await prisma.user.update({ where: { id: bob.user.id }, data: { displayName: 'Bob Builder' } })
+    const task = await createTask(alice, acme.id, website.id, { title: 'Build' })
+
+    await call(alice, 'PATCH', taskPath(acme.id, task.id), { assigneeId: bob.user.id })
+
+    const { items } = await listActivity(alice, acme.id, task.id)
+    expect(items[0]).toMatchObject({ type: 'assignee_changed', from: null, to: 'Bob Builder' })
+  })
+
+  test('records nothing for an update that changes no value', async () => {
+    const { alice, acme, website } = await setup()
+    const task = await createTask(alice, acme.id, website.id, {
+      title: 'Same',
+      dueDate: '2030-01-15T10:00:00.000Z',
+    })
+
+    await call(alice, 'PATCH', taskPath(acme.id, task.id), {
+      title: 'Same',
+      status: 'backlog',
+      dueDate: '2030-01-15T10:00:00.000Z',
+    })
+
+    expect((await listActivity(alice, acme.id, task.id)).total).toBe(1)
+  })
+
+  test('records nothing for an update that is refused', async () => {
+    const { alice, bob, acme, website } = await setup()
+    const task = await createTask(alice, acme.id, website.id, { title: 'Alice only' })
+
+    const denied = await call(bob, 'PATCH', taskPath(acme.id, task.id), { status: 'done' })
+    const invalid = await call(alice, 'PATCH', taskPath(acme.id, task.id), { assigneeId: unknownId })
+    await call(alice, 'PATCH', `/api/organizations/${acme.id}/projects/${website.id}`, { archived: true })
+    const archived = await call(alice, 'PATCH', taskPath(acme.id, task.id), { status: 'done' })
+
+    expect([denied.status, invalid.status, archived.status]).toEqual([403, 400, 409])
+    expect((await listActivity(alice, acme.id, task.id)).total).toBe(1)
+  })
+
+  test('paginates the journal and removes it with the task', async () => {
+    const { alice, acme, website } = await setup()
+    const task = await createTask(alice, acme.id, website.id, { title: 'Busy' })
+    for (const status of ['todo', 'in_progress', 'done']) {
+      await call(alice, 'PATCH', taskPath(acme.id, task.id), { status })
+    }
+
+    const first = await listActivity(alice, acme.id, task.id, '?pageSize=3')
+    const second = await listActivity(alice, acme.id, task.id, '?pageSize=3&page=2')
+
+    expect(first).toMatchObject({ total: 4, page: 1, pageSize: 3, hasNext: true })
+    expect(first.items.map((item) => item.to)).toEqual(['done', 'in_progress', 'todo'])
+    expect(second).toMatchObject({ page: 2, hasNext: false })
+    expect(second.items.map((item) => item.type)).toEqual(['created'])
+
+    await call(alice, 'DELETE', taskPath(acme.id, task.id))
+    expect(await prisma.taskActivity.count({ where: { taskId: task.id } })).toBe(0)
+  })
+
+  test('hides the journal from users who are not members and for unknown tasks', async () => {
+    const { alice, acme, website } = await setup()
+    const mallory = await register('mallory@example.com')
+    const malloryOrganization = await createOrganization(mallory, 'Evil Corp')
+    const task = await createTask(alice, acme.id, website.id, { title: 'Secret' })
+
+    for (const path of [
+      activityPath(acme.id, task.id),
+      activityPath(malloryOrganization.id, task.id),
+      activityPath(acme.id, unknownId),
+      activityPath(unknownId, task.id),
+    ]) {
+      const response = await call(mallory, 'GET', path)
+      expect(response.status, path).toBe(404)
+    }
+    expect((await call(alice, 'GET', activityPath(acme.id, unknownId))).status).toBe(404)
+    expect((await app.request(activityPath(acme.id, task.id))).status).toBe(401)
+    expect((await call(alice, 'GET', `${activityPath(acme.id, task.id)}?page=0`)).status).toBe(400)
+  })
+
   async function setup() {
     const alice = await register('alice@example.com')
     const bob = await register('bob@example.com')
@@ -828,6 +960,30 @@ describe('tasks', () => {
 
   function taskPath(organizationId: string, taskId: string) {
     return `${tasksPath(organizationId)}/${taskId}`
+  }
+
+  function activityPath(organizationId: string, taskId: string) {
+    return `${taskPath(organizationId, taskId)}/activity`
+  }
+
+  async function listActivity(session: Session, organizationId: string, taskId: string, query = '') {
+    const response = await call(session, 'GET', `${activityPath(organizationId, taskId)}${query}`)
+    expect(response.status).toBe(200)
+    return (await response.json()) as {
+      items: Array<{
+        id: string
+        taskId: string
+        type: string
+        actor: { id: string; email: string; displayName: string | null }
+        from: string | null
+        to: string | null
+        createdAt: string
+      }>
+      page: number
+      pageSize: number
+      total: number
+      hasNext: boolean
+    }
   }
 
   function projectTasksPath(organizationId: string, projectId: string) {

@@ -83,10 +83,16 @@ const organizationRoute = createRoute({
   component: lazyRouteComponent(() => import('./pages'), 'OrganizationIndexPage'),
 })
 
-const boardRoute = createRoute({
+// The board and the task window share one layout, so opening a task keeps the board in place.
+const boardLayoutRoute = createRoute({
   getParentRoute: () => userWorkspaceRoute,
+  id: 'boardLayout',
+  component: lazyRouteComponent(() => import('./pages'), 'BoardLayoutPage'),
+})
+
+const boardRoute = createRoute({
+  getParentRoute: () => boardLayoutRoute,
   path: '/app/orgs/$organizationId/board',
-  component: lazyRouteComponent(() => import('./pages'), 'BoardPage'),
 })
 
 const tasksRoute = createRoute({
@@ -96,7 +102,7 @@ const tasksRoute = createRoute({
 })
 
 const taskRoute = createRoute({
-  getParentRoute: () => userWorkspaceRoute,
+  getParentRoute: () => boardLayoutRoute,
   path: '/app/orgs/$organizationId/tasks/$taskId',
   component: lazyRouteComponent(() => import('./pages'), 'TaskPage'),
 })
@@ -155,9 +161,8 @@ const routeTree = rootRoute.addChildren([
     userSettingsRoute,
     newOrganizationRoute,
     organizationRoute,
-    boardRoute,
+    boardLayoutRoute.addChildren([boardRoute, taskRoute]),
     tasksRoute,
-    taskRoute,
     myTasksRoute,
     projectsRoute,
     membersRoute,

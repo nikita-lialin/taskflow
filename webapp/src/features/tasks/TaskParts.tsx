@@ -8,9 +8,11 @@ import {
   type TaskDto,
   type TaskPriority,
   type TaskStatus,
+  type TaskUserDto,
 } from '@taskflow/contracts'
 import { useState, type FormEvent } from 'react'
 
+import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
@@ -25,6 +27,8 @@ import {
   TASK_STATUSES,
   taskPriorityLabels,
   taskStatusLabels,
+  userInitials,
+  userLabel,
   type TaskFilters,
 } from './model'
 
@@ -51,35 +55,11 @@ export function TaskDueDateBadge({ task }: { task: Pick<TaskDto, 'dueDate' | 'st
   )
 }
 
-/** Changes the status of one task. Keyboard users get the native control instead of a drag. */
-export function TaskStatusSelect({
-  disabled,
-  onChange,
-  task,
-}: {
-  disabled: boolean
-  onChange: (status: TaskStatus) => void
-  task: Pick<TaskDto, 'key' | 'status'>
-}) {
+export function TaskAssigneeAvatar({ assignee }: { assignee: TaskUserDto }) {
   return (
-    <NativeSelect
-      aria-label={`Status of ${task.key}`}
-      className="w-full"
-      data-testid="task-status-select"
-      disabled={disabled}
-      onChange={(event) => {
-        const parsed = taskStatusSchema.safeParse(event.target.value)
-        if (parsed.success && parsed.data !== task.status) onChange(parsed.data)
-      }}
-      size="sm"
-      value={task.status}
-    >
-      {TASK_STATUSES.map((status) => (
-        <NativeSelectOption key={status} value={status}>
-          {taskStatusLabels[status]}
-        </NativeSelectOption>
-      ))}
-    </NativeSelect>
+    <Avatar aria-label={userLabel(assignee)} data-testid="card-assignee" role="img" size="sm" title={userLabel(assignee)}>
+      <AvatarFallback>{userInitials(assignee)}</AvatarFallback>
+    </Avatar>
   )
 }
 

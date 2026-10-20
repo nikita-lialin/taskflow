@@ -1,6 +1,8 @@
 import {
   type CreateTaskRequest,
   MAX_PAGE,
+  type TaskActivityDto,
+  type TaskActivityQuery,
   type TaskDto,
   type TasksQuery,
   type UpdateTaskRequest,
@@ -15,8 +17,10 @@ import {
   taskForbidden,
   taskNotFound,
 } from '../domain/errors'
+import { describeChanges } from '../domain/activity'
 import { canDeleteTask, canEditTask } from '../domain/permissions'
 import type {
+  TaskActivityRecord,
   TaskChanges,
   TaskFilter,
   TaskRecord,
@@ -44,7 +48,7 @@ export class TasksService {
       if (!project) throw projectNotFound()
       if (input.assigneeId && !(await write.isMember(input.assigneeId))) throw assigneeNotMember()
       if (project.archivedAt) throw projectArchived()
-      return write.create({
+      const created = await write.create({
         projectId,
         creatorId: callerId,
         title: input.title,
@@ -54,6 +58,8 @@ export class TasksService {
         assigneeId: input.assigneeId ?? null,
         dueDate: input.dueDate ? new Date(input.dueDate) : null,
       })
+      await write.recordActivity(created.id, callerId, [{ type: 'created', from: null, to: null }])
+      return created
     })
     return { task: toTaskDto(task) }
   }
@@ -70,7 +76,10 @@ export class TasksService {
       if (!canEditTask(membership, callerId, current)) throw taskForbidden()
       if (input.assigneeId && !(await write.isMember(input.assigneeId))) throw assigneeNotMember()
       if (current.projectArchived) throw projectArchived()
-      return write.update(taskId, toChanges(input))
+      const updated = await write.update(taskId, toChanges(input))
+      const entries = describeChanges(current.snapshot, updated)
+      if (entries.length > 0) await write.recordActivity(taskId, callerId, entries)
+      return updated
     })
     return { task: toTaskDto(task) }
   }
@@ -105,6 +114,22 @@ export class TasksService {
     return { task: toTaskDto(task) }
   }
 
+  async activity(membership: OrganizationMembership, taskId: string, query: TaskActivityQuery) {
+    const result = await this.dependencies.repository.listActivity(
+      membership.organizationId,
+      taskId,
+      query,
+    )
+    if (!result) throw taskNotFound()
+    return {
+      items: result.items.map(toActivityDto),
+      page: query.page,
+      pageSize: query.pageSize,
+      total: result.total,
+      hasNext: query.page < MAX_PAGE && query.page * query.pageSize < result.total,
+    }
+  }
+
   private async write<T>(
     membership: OrganizationMembership,
     run: (write: TaskWrite) => Promise<T>,
@@ -136,6 +161,18 @@ function toChanges({ description, dueDate, ...rest }: UpdateTaskRequest): TaskCh
 
 function toUserDto({ id, email, displayName }: TaskUserRecord) {
   return { id, email, displayName }
+}
+
+function toActivityDto(record: TaskActivityRecord): TaskActivityDto {
+  return {
+    id: record.id,
+    taskId: record.taskId,
+    type: record.type,
+    actor: toUserDto(record.actor),
+    from: record.from,
+    to: record.to,
+    createdAt: record.createdAt.toISOString(),
+  }
 }
 
 function toTaskDto(record: TaskRecord): TaskDto {

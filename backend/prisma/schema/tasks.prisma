@@ -22,6 +22,18 @@ enum TaskPriority {
   @@map("task_priority")
 }
 
+enum TaskActivityType {
+  created
+  title_changed
+  description_changed
+  status_changed
+  priority_changed
+  assignee_changed
+  due_date_changed
+
+  @@map("task_activity_type")
+}
+
 model Organization {
   id        String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
   name      String
@@ -33,6 +45,7 @@ model Organization {
   projects Project[]
   tasks    Task[]
   comments Comment[]
+  activity TaskActivity[]
 
   @@map("organizations")
 }
@@ -104,8 +117,9 @@ model Task {
   assignee     User?        @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull, map: "tasks_assignee_id_fkey")
   creator      User         @relation("TaskCreator", fields: [creatorId], references: [id], onDelete: Restrict, map: "tasks_creator_id_fkey")
   comments     Comment[]
+  activity     TaskActivity[]
 
-  /// Target of the composite foreign key on `Comment`.
+  /// Target of the composite foreign key on `Comment` and `TaskActivity`.
   @@unique([id, organizationId], map: "tasks_id_organization_id_key")
   @@unique([projectId, number], map: "tasks_project_id_number_key")
   @@index([organizationId, projectId, status], map: "tasks_organization_id_project_id_status_idx")
@@ -133,4 +147,26 @@ model Comment {
   @@index([taskId, createdAt], map: "comments_task_id_created_at_idx")
   @@index([authorId], map: "comments_author_id_idx")
   @@map("comments")
+}
+
+/// One change of one task field, kept for the journal of the task. `fromValue` and `toValue` are
+/// text snapshots taken when the change happened: an assignee is stored by name, so the journal
+/// stays readable after the person is renamed or removed. A description change keeps no text.
+model TaskActivity {
+  id             String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  organizationId String           @map("organization_id") @db.Uuid
+  taskId         String           @map("task_id") @db.Uuid
+  actorId        String           @map("actor_id") @db.Uuid
+  type           TaskActivityType
+  fromValue      String?          @map("from_value")
+  toValue        String?          @map("to_value")
+  createdAt      DateTime         @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade, map: "task_activity_organization_id_fkey")
+  task         Task         @relation(fields: [taskId, organizationId], references: [id, organizationId], onDelete: Cascade, map: "task_activity_task_id_organization_id_fkey")
+  actor        User         @relation(fields: [actorId], references: [id], onDelete: Restrict, map: "task_activity_actor_id_fkey")
+
+  @@index([taskId, createdAt], map: "task_activity_task_id_created_at_idx")
+  @@index([actorId], map: "task_activity_actor_id_idx")
+  @@map("task_activity")
 }

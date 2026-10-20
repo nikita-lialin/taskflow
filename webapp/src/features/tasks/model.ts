@@ -5,6 +5,7 @@ import {
   type TaskDto,
   type TaskPriority,
   type TasksQuery,
+  type TasksResponse,
   type TaskStatus,
   type TaskUserDto,
   type UpdateTaskRequest,
@@ -28,6 +29,32 @@ export const taskPriorityLabels: Record<TaskPriority, string> = {
 
 export function userLabel(user: Pick<TaskUserDto, 'displayName' | 'email'>) {
   return user.displayName ?? user.email
+}
+
+/** Up to two letters for an avatar: the first letters of the first two words of the name. */
+export function userInitials(user: Pick<TaskUserDto, 'displayName' | 'email'>) {
+  return userLabel(user)
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((word) => word.charAt(0).toUpperCase())
+    .join('')
+}
+
+/** The column page without a task, for the column the task leaves. Returns the same page when absent. */
+export function removeTaskFromPage(page: TasksResponse, taskId: string): TasksResponse {
+  if (!page.items.some((item) => item.id === taskId)) return page
+  return {
+    ...page,
+    items: page.items.filter((item) => item.id !== taskId),
+    total: page.total - 1,
+  }
+}
+
+/** The column page with the task first, for the column the task enters. */
+export function addTaskToPage(page: TasksResponse, task: TaskDto, status: TaskStatus): TasksResponse {
+  if (page.items.some((item) => item.id === task.id)) return page
+  return { ...page, items: [{ ...task, status }, ...page.items], total: page.total + 1 }
 }
 
 /**
@@ -163,4 +190,25 @@ export function buildTaskUpdate(task: TaskDto, values: TaskFormValues): UpdateTa
   }
   if (values.dueDate !== saved.dueDate) update.dueDate = dueDateToIso(values.dueDate)
   return update
+}
+
+/**
+ * The form values with the saves that are still in flight applied in order. A field shows what the
+ * person chose at once, and goes back to the saved value if the save fails.
+ */
+export function applyPendingUpdates(
+  values: TaskFormValues,
+  updates: ReadonlyArray<UpdateTaskRequest>,
+): TaskFormValues {
+  if (updates.length === 0) return values
+  const shown = { ...values }
+  for (const update of updates) {
+    if (update.title !== undefined) shown.title = update.title
+    if (update.description !== undefined) shown.description = update.description ?? ''
+    if (update.status !== undefined) shown.status = update.status
+    if (update.priority !== undefined) shown.priority = update.priority
+    if (update.assigneeId !== undefined) shown.assigneeId = update.assigneeId ?? ''
+    if (update.dueDate !== undefined) shown.dueDate = isoToDueDateInput(update.dueDate)
+  }
+  return shown
 }

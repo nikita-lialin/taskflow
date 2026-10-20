@@ -116,4 +116,5 @@ export type CreateTaskRequest = z.infer<typeof createTaskRequestSchema>
 export type UpdateTaskRequest = z.infer<typeof updateTaskRequestSchema>
 export type TasksQuery =z.infer<typeof tasksQuerySchema>
 export type TaskDto = z.infer<typeof taskSchema>
+export type TasksResponse = z.infer<typeof tasksResponseSchema>
 export type TaskUserDto = z.infer<typeof taskUserSchema>
