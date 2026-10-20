@@ -1,0 +1,127 @@
+enum OrganizationRole {
+  admin
+  member
+
+  @@map("organization_role")
+}
+
+enum TaskStatus {
+  backlog
+  todo
+  in_progress
+  done
+
+  @@map("task_status")
+}
+
+enum TaskPriority {
+  low
+  medium
+  high
+
+  @@map("task_priority")
+}
+
+model Organization {
+  id        String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  name      String
+  slug      String   @unique(map: "organizations_slug_key")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  members  OrganizationMember[]
+  projects Project[]
+  tasks    Task[]
+  comments Comment[]
+
+  @@map("organizations")
+}
+
+/// A user's role inside one organization. The organization role is separate from `User.role`,
+/// which is the platform-wide role. A user can belong to several organizations.
+model OrganizationMember {
+  id             String           @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  organizationId String           @map("organization_id") @db.Uuid
+  userId         String           @map("user_id") @db.Uuid
+  role           OrganizationRole @default(member)
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade, map: "organization_members_organization_id_fkey")
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade, map: "organization_members_user_id_fkey")
+
+  @@unique([organizationId, userId], map: "organization_members_organization_id_user_id_key")
+  @@index([userId], map: "organization_members_user_id_idx")
+  @@map("organization_members")
+}
+
+model Project {
+  id             String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  name           String
+  description    String?
+  archivedAt     DateTime? @map("archived_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade, map: "projects_organization_id_fkey")
+  tasks        Task[]
+
+  /// Target of the composite foreign key on `Task`: it makes a task's organization equal to its
+  /// project's organization at the database level.
+  @@unique([id, organizationId], map: "projects_id_organization_id_key")
+  @@unique([organizationId, name], map: "projects_organization_id_name_key")
+  @@map("projects")
+}
+
+/// `organizationId` repeats the project's organization on purpose. Every query filters by it, and
+/// the composite foreign key to `Project` keeps it equal to the project's organization.
+/// The application checks that the assignee is a member of the organization.
+model Task {
+  id             String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  projectId      String       @map("project_id") @db.Uuid
+  title          String
+  description    String?
+  status         TaskStatus   @default(backlog)
+  priority       TaskPriority @default(medium)
+  assigneeId     String?      @map("assignee_id") @db.Uuid
+  creatorId      String       @map("creator_id") @db.Uuid
+  dueDate        DateTime?    @map("due_date")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade, map: "tasks_organization_id_fkey")
+  project      Project      @relation(fields: [projectId, organizationId], references: [id, organizationId], onDelete: Cascade, map: "tasks_project_id_organization_id_fkey")
+  assignee     User?        @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull, map: "tasks_assignee_id_fkey")
+  creator      User         @relation("TaskCreator", fields: [creatorId], references: [id], onDelete: Restrict, map: "tasks_creator_id_fkey")
+  comments     Comment[]
+
+  /// Target of the composite foreign key on `Comment`.
+  @@unique([id, organizationId], map: "tasks_id_organization_id_key")
+  @@index([organizationId, projectId, status], map: "tasks_organization_id_project_id_status_idx")
+  @@index([projectId, status], map: "tasks_project_id_status_idx")
+  @@index([organizationId, assigneeId, status], map: "tasks_organization_id_assignee_id_status_idx")
+  @@index([assigneeId], map: "tasks_assignee_id_idx")
+  @@index([creatorId], map: "tasks_creator_id_idx")
+  @@index([organizationId, dueDate], map: "tasks_organization_id_due_date_idx")
+  @@map("tasks")
+}
+
+model Comment {
+  id             String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  taskId         String   @map("task_id") @db.Uuid
+  authorId       String   @map("author_id") @db.Uuid
+  body           String
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade, map: "comments_organization_id_fkey")
+  task         Task         @relation(fields: [taskId, organizationId], references: [id, organizationId], onDelete: Cascade, map: "comments_task_id_organization_id_fkey")
+  author       User         @relation(fields: [authorId], references: [id], onDelete: Restrict, map: "comments_author_id_fkey")
+
+  @@index([taskId, createdAt], map: "comments_task_id_created_at_idx")
+  @@index([authorId], map: "comments_author_id_idx")
+  @@map("comments")
+}

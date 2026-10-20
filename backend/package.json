@@ -1,0 +1,50 @@
+{
+  "name": "@taskflow/backend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run prisma:generate && bun scripts/dev.mjs",
+    "start": "bun run start:api",
+    "start:api": "bun run prisma:generate && bun src/index.ts",
+    "start:worker": "bun src/worker.ts",
+    "start:scheduler": "bun src/scheduler.ts",
+    "start:cron": "bun src/cron.ts",
+    "start:raw": "bun src/index.ts",
+    "build": "bun run prisma:generate && tsc --noEmit",
+    "typecheck": "bun run prisma:generate && tsc --noEmit",
+    "test": "bun run test:unit && bun run test:integration",
+    "test:unit": "bun scripts/test-unit.mjs",
+    "test:integration": "bun scripts/test-integration.mjs",
+    "test:live": "bun scripts/test-live.mjs",
+    "smoke:docker": "bun scripts/docker-smoke.mjs",
+    "prisma": "prisma",
+    "prisma:generate": "bun scripts/prisma-generate.mjs",
+    "prisma:generate:raw": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:seed": "prisma db seed",
+    "db:deploy": "bun scripts/deploy-database.ts",
+    "db:adopt-owner": "bun scripts/adopt-database-owner.ts",
+    "prisma:validate": "prisma validate"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1149.0",
+    "@aws-sdk/s3-request-presigner": "^3.1149.0",
+    "@hono/zod-openapi": "^1.6.3",
+    "@prisma/adapter-pg": "7.10.0",
+    "@prisma/client": "7.10.0",
+    "@smithy/signature-v4": "^5.7.4",
+    "@taskflow/contracts": "workspace:*",
+    "croner": "^10.0.1",
+    "dotenv": "^18.0.7",
+    "hono": "^4.13.13",
+    "jose": "^6.2.12",
+    "prisma": "7.10.0",
+    "zod": "^4.6.6"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.3",
+    "typescript": "~6.0.3"
+  }
+}

@@ -1,0 +1,493 @@
+import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+import { createApp } from '../../app'
+import { createPrisma } from '../../db'
+import { createPrismaAvatarsRepository } from './infrastructure/avatars-repository'
+import { cleanupUploads } from './index'
+import { loadEnv } from '../../env'
+import { createBackgroundTasks } from '../../background-tasks'
+import { createEmailDelivery } from '../../email'
+import { drainTaskOutbox } from '../../outbox'
+import type { BackendRuntime } from '../../runtime'
+import { privateStorageConfigFromEnv, type FilesystemStorageConfig } from '../../storage/config'
+import { createFilesystemStorageRoutes } from '../../storage/filesystem-routes'
+import { FilesystemPrivateStorage } from '../../storage/filesystem-storage'
+import { pngFixture } from '../../storage/storage-contract'
+
+const databaseUrl = process.env.TEST_DATABASE_URL
+if (!databaseUrl) throw new Error('TEST_DATABASE_URL is required; run bun run test:backend:integration')
+
+const jpegFixture = Buffer.concat([
+  Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
+  Buffer.alloc(pngFixture.byteLength - 4, 0x20),
+])
+
+describe('avatar upload API integration', () => {
+  const env = loadEnv({
+    DATABASE_URL: databaseUrl,
+    JWT_SECRET: '12345678901234567890123456789012',
+    CORS_ORIGINS: 'http://localhost:5173',
+    ACCESS_TOKEN_TTL_SECONDS: '60',
+    // This suite makes many authenticated requests in a row; the default limit would trip.
+    AUTH_RATE_LIMIT_MAX: '200',
+  })
+
+  const prisma = createPrisma(databaseUrl)
+  let root: string
+  let storage: FilesystemPrivateStorage
+  let app: ReturnType<typeof createApp>
+
+  beforeEach(async () => {
+    await prisma.taskOutbox.deleteMany()
+    await prisma.userAvatar.deleteMany()
+    await prisma.authSession.deleteMany()
+    await prisma.user.deleteMany()
+
+    root = await mkdtemp(join(tmpdir(), 'uploads-integration-'))
+    const config = privateStorageConfigFromEnv({
+      ...env,
+      PRIVATE_STORAGE_LOCAL_ROOT: root,
+    }) as FilesystemStorageConfig
+    storage = new FilesystemPrivateStorage(config)
+    app = createApp({
+      env,
+      prisma,
+      privateStorage: { storage, httpRoutes: createFilesystemStorageRoutes(config) },
+    })
+  })
+
+  afterAll(async () => {
+    await prisma.$disconnect()
+  })
+
+  afterEach(async () => {
+    if (root) await rm(root, { recursive: true, force: true })
+  })
+
+  async function register(email: string) {
+    const response = await app.request('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password: 'password-1234' }),
+    })
+    expect(response.status).toBe(201)
+    return (await response.json()) as { accessToken: string; user: { id: string } }
+  }
+
+  function authenticated(accessToken: string) {
+    return { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
+  }
+
+  async function requestTicket(accessToken: string, body: Buffer, contentType: string) {
+    const response = await app.request('/api/uploads/avatar', {
+      method: 'POST',
+      headers: authenticated(accessToken),
+      body: JSON.stringify({ contentType, byteSize: body.byteLength }),
+    })
+    expect(response.status).toBe(201)
+    return (await response.json()).upload as {
+      uploadId: string
+      url: string
+      method: string
+      headers: Record<string, string>
+    }
+  }
+
+  async function transfer(ticket: { url: string; headers: Record<string, string> }, body: Buffer) {
+    return app.request(ticket.url, {
+      method: 'PUT',
+      headers: ticket.headers,
+      body: new Uint8Array(body),
+    })
+  }
+
+  async function finalize(accessToken: string, uploadId: string) {
+    return app.request(`/api/uploads/avatar/${uploadId}/finalize`, {
+      method: 'POST',
+      headers: authenticated(accessToken),
+    })
+  }
+
+  test('carries an avatar from ticket to published, and serves it through a signed URL', async () => {
+    const session = await register('avatar@example.com')
+
+    const ticket = await requestTicket(session.accessToken, pngFixture, 'image/png')
+    expect((await transfer(ticket, pngFixture)).status).toBe(200)
+
+    const finalized = await finalize(session.accessToken, ticket.uploadId)
+    const body = await finalized.json()
+
+    expect(finalized.status).toBe(200)
+    expect(body.avatar).toMatchObject({ contentType: 'image/png', byteSize: pngFixture.byteLength })
+
+    const download = await app.request(body.avatar.downloadUrl)
+    expect(download.status).toBe(200)
+    expect(Buffer.from(await download.arrayBuffer())).toEqual(pngFixture)
+
+    const current = await app.request('/api/uploads/avatar', {
+      headers: authenticated(session.accessToken),
+    })
+    expect((await current.json()).avatar.downloadUrl).toBeTruthy()
+  })
+
+  test('reports no avatar for a user who has not uploaded one', async () => {
+    const session = await register('empty@example.com')
+
+    const response = await app.request('/api/uploads/avatar', {
+      headers: authenticated(session.accessToken),
+    })
+
+    expect(response.status).toBe(200)
+    expect((await response.json()).avatar).toBeNull()
+  })
+
+  test('requires authentication on every avatar route', async () => {
+    for (const [path, method] of [
+      ['/api/uploads/avatar', 'GET'],
+      ['/api/uploads/avatar', 'POST'],
+      ['/api/uploads/avatar', 'DELETE'],
+      ['/api/uploads/avatar/019c0000-0000-7000-8000-000000000001/finalize', 'POST'],
+    ] as const) {
+      const response = await app.request(path, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        ...(method === 'POST' && path === '/api/uploads/avatar'
+          ? { body: JSON.stringify({ contentType: 'image/png', byteSize: 1024 }) }
+          : {}),
+      })
+      expect(response.status).toBe(401)
+    }
+  })
+
+  test('refuses to finalize an upload that never completed, then accepts the retry', async () => {
+    const session = await register('interrupted@example.com')
+    const ticket = await requestTicket(session.accessToken, pngFixture, 'image/png')
+
+    const premature = await finalize(session.accessToken, ticket.uploadId)
+    expect(premature.status).toBe(409)
+    expect((await premature.json()).error.code).toBe('UPLOAD_NOT_COMPLETED')
+
+    expect((await transfer(ticket, pngFixture)).status).toBe(200)
+    expect((await finalize(session.accessToken, ticket.uploadId)).status).toBe(200)
+  })
+
+  test('refuses an upload whose window has closed and clears it away', async () => {
+    const session = await register('expired@example.com')
+    const ticket = await requestTicket(session.accessToken, pngFixture, 'image/png')
+    expect((await transfer(ticket, pngFixture)).status).toBe(200)
+    const { objectKey } = await prisma.userAvatar.update({
+      where: { id: ticket.uploadId },
+      data: { expiresAt: new Date(Date.now() - 1_000) },
+    })
+
+    const finalized = await finalize(session.accessToken, ticket.uploadId)
+
+    expect(finalized.status).toBe(410)
+    expect((await finalized.json()).error.code).toBe('UPLOAD_EXPIRED')
+    expect(await prisma.userAvatar.count({ where: { id: ticket.uploadId } })).toBe(0)
+    await waitForDeletion(objectKey)
+  })
+
+  test('recovers from an interrupted transfer by issuing a new write-once key', async () => {
+    const session = await register('recovery@example.com')
+
+    const abandoned = await requestTicket(session.accessToken, pngFixture, 'image/png')
+    expect((await transfer(abandoned, pngFixture)).status).toBe(200)
+    // A retry against the same key is refused, which is why a fresh ticket is required.
+    expect((await transfer(abandoned, pngFixture)).status).toBe(412)
+
+    const retry = await requestTicket(session.accessToken, pngFixture, 'image/png')
+    expect(retry.url).not.toBe(abandoned.url)
+    expect((await transfer(retry, pngFixture)).status).toBe(200)
+    expect((await finalize(session.accessToken, retry.uploadId)).status).toBe(200)
+
+    // The superseded pending row is gone, so the unique constraint is satisfied.
+    expect(await prisma.userAvatar.count({ where: { state: 'pending' } })).toBe(0)
+  })
+
+  test('rejects bytes that are not the declared image', async () => {
+    const session = await register('mismatch@example.com')
+    const ticket = await requestTicket(session.accessToken, pngFixture, 'image/png')
+    const { objectKey } = await prisma.userAvatar.findUniqueOrThrow({ where: { id: ticket.uploadId } })
+
+    expect((await transfer(ticket, jpegFixture)).status).toBe(200)
+
+    const finalized = await finalize(session.accessToken, ticket.uploadId)
+    expect(finalized.status).toBe(409)
+    expect((await finalized.json()).error.code).toBe('UPLOAD_REJECTED')
+    await waitForDeletion(objectKey)
+  })
+
+  test('rejects stored bytes whose size does not match the declared size', async () => {
+    // The storage endpoint already refuses a body of the wrong length, so the object is written
+    // directly: finalize must check what was stored rather than trust the signed transfer.
+    const session = await register('truncated@example.com')
+    const ticket = await requestTicket(session.accessToken, pngFixture, 'image/png')
+    const { objectKey } = await prisma.userAvatar.findUniqueOrThrow({ where: { id: ticket.uploadId } })
+    await storage.putObjectOnce(objectKey, new Uint8Array(pngFixture.subarray(0, 20)), 'image/png')
+
+    const finalized = await finalize(session.accessToken, ticket.uploadId)
+
+    expect(finalized.status).toBe(409)
+    expect((await finalized.json()).error.code).toBe('UPLOAD_REJECTED')
+  })
+
+  test('rejects an upload larger than the declared size at the storage endpoint', async () => {
+    const session = await register('oversized@example.com')
+    const ticket = await requestTicket(session.accessToken, pngFixture, 'image/png')
+
+    const response = await transfer(ticket, Buffer.concat([pngFixture, Buffer.from([0])]))
+
+    expect(response.status).toBe(403)
+  })
+
+  test('rejects an unsupported content type before any bytes move', async () => {
+    const session = await register('unsupported@example.com')
+
+    const response = await app.request('/api/uploads/avatar', {
+      method: 'POST',
+      headers: authenticated(session.accessToken),
+      body: JSON.stringify({ contentType: 'image/svg+xml', byteSize: 1024 }),
+    })
+
+    expect(response.status).toBe(400)
+  })
+
+  test('reports a driver limit below the contract limit as a client error, not a server fault', async () => {
+    // The contract accepts up to AVATAR_MAX_BYTES, but PRIVATE_STORAGE_UPLOAD_MAX_BYTES can be
+    // configured lower. The storage layer then refuses a request the contract let through, and
+    // that must reach the caller as 400 rather than surfacing as an unhandled 500.
+    const tightEnv = { ...env, PRIVATE_STORAGE_UPLOAD_MAX_BYTES: 32 }
+    const tightConfig = privateStorageConfigFromEnv({
+      ...tightEnv,
+      PRIVATE_STORAGE_LOCAL_ROOT: root,
+    }) as FilesystemStorageConfig
+    const tightApp = createApp({
+      env: tightEnv,
+      prisma,
+      privateStorage: {
+        storage: new FilesystemPrivateStorage(tightConfig),
+        httpRoutes: createFilesystemStorageRoutes(tightConfig),
+      },
+    })
+
+    const register = await tightApp.request('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'tight@example.com', password: 'password-1234' }),
+    })
+    const { accessToken } = await register.json()
+
+    const response = await tightApp.request('/api/uploads/avatar', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contentType: 'image/png', byteSize: pngFixture.byteLength }),
+    })
+
+    expect(response.status).toBe(400)
+    expect((await response.json()).error.code).toBe('VALIDATION_ERROR')
+  })
+
+  test('keeps one live avatar per user and deletes the object it replaces', async () => {
+    const session = await register('replace@example.com')
+
+    const first = await requestTicket(session.accessToken, pngFixture, 'image/png')
+    await transfer(first, pngFixture)
+    await finalize(session.accessToken, first.uploadId)
+    const firstKey = (await prisma.userAvatar.findFirstOrThrow({ where: { state: 'ready' } }))
+      .objectKey
+
+    const second = await requestTicket(session.accessToken, jpegFixture, 'image/jpeg')
+    await transfer(second, jpegFixture)
+    const replaced = await finalize(session.accessToken, second.uploadId)
+
+    expect(replaced.status).toBe(200)
+    expect((await replaced.json()).avatar.contentType).toBe('image/jpeg')
+    expect(await prisma.userAvatar.count({ where: { userId: session.user.id } })).toBe(1)
+    await waitForDeletion(firstKey)
+  })
+
+  test('never lets one user finalize or read another user’s upload', async () => {
+    const owner = await register('owner@example.com')
+    const intruder = await register('intruder@example.com')
+
+    const ticket = await requestTicket(owner.accessToken, pngFixture, 'image/png')
+    await transfer(ticket, pngFixture)
+
+    expect((await finalize(intruder.accessToken, ticket.uploadId)).status).toBe(404)
+
+    await finalize(owner.accessToken, ticket.uploadId)
+    const intruderView = await app.request('/api/uploads/avatar', {
+      headers: authenticated(intruder.accessToken),
+    })
+    expect((await intruderView.json()).avatar).toBeNull()
+  })
+
+  test('deletes the avatar and its object, and stays idempotent', async () => {
+    const session = await register('delete@example.com')
+    const ticket = await requestTicket(session.accessToken, pngFixture, 'image/png')
+    await transfer(ticket, pngFixture)
+    const published = await finalize(session.accessToken, ticket.uploadId)
+    const { downloadUrl } = (await published.json()).avatar
+    const key = (await prisma.userAvatar.findFirstOrThrow({ where: { state: 'ready' } })).objectKey
+
+    const removed = await app.request('/api/uploads/avatar', {
+      method: 'DELETE',
+      headers: authenticated(session.accessToken),
+    })
+
+    expect(removed.status).toBe(200)
+    expect((await removed.json()).avatar).toBeNull()
+    await waitForDeletion(key)
+    expect((await app.request(downloadUrl)).status).toBe(404)
+
+    const again = await app.request('/api/uploads/avatar', {
+      method: 'DELETE',
+      headers: authenticated(session.accessToken),
+    })
+    expect(again.status).toBe(200)
+  })
+
+  test('commits immediate and final deletion tasks before returning, without a running worker', async () => {
+    const session = await register('durable@example.com')
+    const ticket = await requestTicket(session.accessToken, pngFixture, 'image/png')
+    await transfer(ticket, pngFixture)
+    const old = await prisma.userAvatar.findFirstOrThrow()
+
+    const response = await app.request('/api/uploads/avatar', {
+      method: 'DELETE', headers: authenticated(session.accessToken),
+    })
+    expect(response.status).toBe(200)
+    const tasks = await prisma.taskOutbox.findMany({ orderBy: { scheduledFor: 'asc' } })
+    expect(tasks).toHaveLength(2)
+    expect(tasks.map((task) => task.type)).toEqual(['uploads:delete-object', 'uploads:delete-object'])
+    expect(tasks[1]!.scheduledFor.getTime()).toBe(old.expiresAt.getTime() + 3_600_000)
+    expect(await storage.headObject(old.objectKey)).not.toBeNull()
+
+    // A new runner uses only committed state, as after an API restart.
+    await drainDeletions()
+    expect(await storage.headObject(old.objectKey)).toBeNull()
+    expect((await transfer(ticket, pngFixture)).status).toBe(200)
+    await drainDeletions(tasks[1]!.scheduledFor)
+    expect(await storage.headObject(old.objectKey)).toBeNull()
+  })
+
+  test('rolls back avatar removal when its deletion task cannot be written', async () => {
+    const session = await register('rollback-avatar@example.com')
+    const ticket = await requestTicket(session.accessToken, pngFixture, 'image/png')
+    const old = await prisma.userAvatar.findFirstOrThrow()
+    await prisma.$executeRaw`ALTER TABLE task_outbox ADD CONSTRAINT test_reject_avatar_delete CHECK (type <> 'uploads:delete-object')`
+    try {
+      const result = await app.request('/api/uploads/avatar', {
+        method: 'DELETE', headers: authenticated(session.accessToken),
+      })
+      expect(result.status).toBe(500)
+      expect(await prisma.userAvatar.findUnique({ where: { id: old.id } })).not.toBeNull()
+      expect(await prisma.taskOutbox.count()).toBe(0)
+    } finally {
+      await prisma.$executeRaw`ALTER TABLE task_outbox DROP CONSTRAINT test_reject_avatar_delete`
+    }
+    expect(ticket.uploadId).toBe(old.id)
+  })
+
+  test('retries failed storage deletion using the committed outbox task', async () => {
+    const session = await register('retry-delete@example.com')
+    const ticket = await requestTicket(session.accessToken, pngFixture, 'image/png')
+    await transfer(ticket, pngFixture)
+    const old = await prisma.userAvatar.findFirstOrThrow()
+    await app.request('/api/uploads/avatar', {
+      method: 'DELETE', headers: authenticated(session.accessToken),
+    })
+    const deleteObject = storage.deleteObject.bind(storage)
+    storage.deleteObject = async () => { throw new Error('Storage unavailable') }
+    expect((await drainDeletions()).transientFailed).toBe(1)
+    expect(await storage.headObject(old.objectKey)).not.toBeNull()
+    const retry = await prisma.taskOutbox.findFirstOrThrow({ where: {
+      dedupeKey: `${old.objectKey}:immediate`, status: 'pending',
+    } })
+    storage.deleteObject = deleteObject
+    expect((await drainDeletions(retry.scheduledFor)).done).toBe(1)
+    expect(await storage.headObject(old.objectKey)).toBeNull()
+  })
+
+  test('maintenance retains failed deletions and the one-hour upload grace boundary', async () => {
+    const session = await register('maintenance-avatar@example.com')
+    const ticket = await requestTicket(session.accessToken, pngFixture, 'image/png')
+    await transfer(ticket, pngFixture)
+    const now = new Date()
+    await prisma.userAvatar.update({ where: { id: ticket.uploadId }, data: {
+      expiresAt: new Date(now.getTime() - 3_600_000),
+    } })
+    expect((await cleanupUploads({ db: prisma, storage }, now)).removed).toBe(0)
+    const deleteObject = storage.deleteObject.bind(storage)
+    storage.deleteObject = async () => { throw new Error('Storage unavailable') }
+    expect((await cleanupUploads({ db: prisma, storage }, new Date(now.getTime() + 1))).leftToRetry).toBe(1)
+    expect(await prisma.userAvatar.count()).toBe(1)
+    storage.deleteObject = deleteObject
+    expect((await cleanupUploads({ db: prisma, storage }, new Date(now.getTime() + 1))).removed).toBe(1)
+  })
+
+  test('never lets a lost race delete a published avatar or its object', async () => {
+    // Both guards live in the real repository, so they are exercised through it rather than
+    // through a fake that could simply mirror them. The scenario is two finalizes of one upload:
+    // the winner publishes it, and the loser must neither re-promote it nor discard it.
+    const session = await register('race@example.com')
+    const ticket = await requestTicket(session.accessToken, pngFixture, 'image/png')
+    await transfer(ticket, pngFixture)
+
+    const repository = createPrismaAvatarsRepository(prisma)
+    await finalize(session.accessToken, ticket.uploadId)
+    const published = await prisma.userAvatar.findFirstOrThrow({ where: { state: 'ready' } })
+
+    // The loser's promote finds nothing pending and reports it, instead of deleting the winner.
+    expect(
+      await repository.promoteToReady({
+        userId: session.user.id,
+        uploadId: ticket.uploadId,
+        readyAt: new Date(),
+      }),
+    ).toBeNull()
+
+    // The loser's discard reports no object to delete, so the published bytes are left alone.
+    expect(await repository.removePending(session.user.id, ticket.uploadId)).toBe(false)
+
+    const survivor = await prisma.userAvatar.findUniqueOrThrow({ where: { id: published.id } })
+    expect(survivor.state).toBe('ready')
+    expect(survivor.objectKey).toBe(published.objectKey)
+    expect(await storage.headObject(published.objectKey)).not.toBeNull()
+  })
+
+  test('removes a user’s avatar rows when the user is deleted', async () => {
+    const session = await register('cascade@example.com')
+    const ticket = await requestTicket(session.accessToken, pngFixture, 'image/png')
+    await transfer(ticket, pngFixture)
+    await finalize(session.accessToken, ticket.uploadId)
+
+    await prisma.user.delete({ where: { id: session.user.id } })
+
+    expect(await prisma.userAvatar.count({ where: { userId: session.user.id } })).toBe(0)
+  })
+
+  /** Object deletion is deferred past the response on purpose, so poll rather than assume. */
+  async function waitForDeletion(objectKey: string) {
+    await drainDeletions()
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      if ((await storage.headObject(objectKey)) === null) return
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+
+    throw new Error(`Storage object ${objectKey} was never deleted`)
+  }
+
+  function drainDeletions(now = new Date()) {
+    return drainTaskOutbox({ prisma, env, privateStorage: { storage, httpRoutes: null },
+      backgroundTasks: createBackgroundTasks(), emailDelivery: createEmailDelivery(env),
+      close: async () => {},
+    } satisfies BackendRuntime, {
+      now, clock: () => now,
+    })
+  }
+})
