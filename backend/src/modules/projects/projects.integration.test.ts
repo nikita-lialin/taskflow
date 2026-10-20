@@ -253,6 +253,7 @@ describe('projects', () => {
     expect(await listNames(alice, `${base}?q=site&archived=all`)).toEqual(['Legacy site', 'Website'])
     expect(await listNames(alice, `${base}?q=%20%20`)).toEqual(['Mobile app', 'Website'])
     expect(await listNames(alice, `${base}?q=nothing`)).toEqual([])
+    expect(await listNames(alice, `${base}?q=${encodeURIComponent('%')}`)).toEqual([])
     expect(website.archivedAt).toBeNull()
   })
 
@@ -290,9 +291,9 @@ describe('projects', () => {
       [mobile, acme.id, alice.user.id, ['backlog']],
       [foreign, beta.id, bob.user.id, ['in_progress', 'in_progress']],
     ] as const) {
-      for (const status of statuses) {
+      for (const [index, status] of statuses.entries()) {
         await prisma.task.create({
-          data: { organizationId, projectId: project.id, title: 'Task', status, creatorId },
+          data: { organizationId, projectId: project.id, number: index + 1, title: 'Task', status, creatorId },
         })
       }
     }

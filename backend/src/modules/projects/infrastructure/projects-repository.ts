@@ -1,5 +1,5 @@
 import type { Prisma } from '../../../generated/prisma/client'
-import type { DbClient } from '../../../db'
+import { containsText, type DbClient } from '../../../db'
 import type { ProjectsRepository, ProjectsMutation } from '../application/ports'
 
 const projectSelect = {
@@ -19,7 +19,7 @@ export function createPrismaProjectsRepository(db: DbClient): ProjectsRepository
         organizationId,
         ...(archived === 'false' && { archivedAt: null }),
         ...(archived === 'true' && { archivedAt: { not: null } }),
-        ...(q && { name: { contains: q, mode: 'insensitive' } }),
+        ...(q && { name: containsText(q) }),
       }
       const [total, items] = await db.$transaction([
         db.project.count({ where }),

@@ -87,6 +87,8 @@ model Task {
   id             String       @id @default(dbgenerated("uuidv7()")) @db.Uuid
   organizationId String       @map("organization_id") @db.Uuid
   projectId      String       @map("project_id") @db.Uuid
+  /// Sequence inside the project, shown as `KEY-number`. Never reused after a delete.
+  number         Int
   title          String
   description    String?
   status         TaskStatus   @default(backlog)
@@ -105,6 +107,7 @@ model Task {
 
   /// Target of the composite foreign key on `Comment`.
   @@unique([id, organizationId], map: "tasks_id_organization_id_key")
+  @@unique([projectId, number], map: "tasks_project_id_number_key")
   @@index([organizationId, projectId, status], map: "tasks_organization_id_project_id_status_idx")
   @@index([projectId, status], map: "tasks_project_id_status_idx")
   @@index([organizationId, assigneeId, status], map: "tasks_organization_id_assignee_id_status_idx")

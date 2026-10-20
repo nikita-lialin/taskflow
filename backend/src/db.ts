@@ -9,6 +9,14 @@ export function createPrisma(connectionString: string) {
 
 export type DbClient = ReturnType<typeof createPrisma>
 
+/**
+ * A case-insensitive substring filter. Prisma's `contains` hands `%`, `_` and `\` to `LIKE`
+ * unescaped, so a search for `100%` would match everything. This escapes them.
+ */
+export function containsText(text: string) {
+  return { contains: text.replace(/[\\%_]/g, '\\$&'), mode: 'insensitive' } as const
+}
+
 export const userAuthorityTransitionTransactionOptions = {
   timeout: 15_000,
 } as const

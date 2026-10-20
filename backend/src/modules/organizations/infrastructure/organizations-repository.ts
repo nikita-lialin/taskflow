@@ -98,6 +98,12 @@ export function createPrismaOrganizationsRepository(db: DbClient): Organizations
             return toMemberRecord(member)
           },
           async removeMember(userId) {
+            // A task may only be assigned to a current member, so the member's tasks in this
+            // organization become unassigned in the same transaction.
+            await tx.task.updateMany({
+              where: { organizationId, assigneeId: userId },
+              data: { assigneeId: null },
+            })
             await tx.organizationMember.delete({
               where: { organizationId_userId: { organizationId, userId } },
             })

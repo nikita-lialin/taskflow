@@ -16,6 +16,7 @@ import { createAuthSecurity, createFixedWindowRateLimit } from './http/security'
 import { createAuthModule, type AuthHttpEnv } from './modules/auth'
 import { createOrganizationsModule } from './modules/organizations'
 import { createProjectsModule } from './modules/projects'
+import { createTasksModule } from './modules/tasks'
 import { createUploadsModule } from './modules/uploads'
 import { createUsersModule } from './modules/users'
 import { createRateLimitStores } from './rate-limit'
@@ -63,6 +64,11 @@ export function createApp({
   })
   const organizations = createOrganizationsModule({ db: prisma, requireAuth: auth.requireAuth })
   const projects = createProjectsModule({
+    db: prisma,
+    requireAuth: auth.requireAuth,
+    requireMembership: organizations.requireMembership,
+  })
+  const tasks = createTasksModule({
     db: prisma,
     requireAuth: auth.requireAuth,
     requireMembership: organizations.requireMembership,
@@ -152,6 +158,8 @@ export function createApp({
   app.route('/api/users', users.userRoutes)
   app.route('/api/admin', users.adminRoutes)
   app.route('/api/organizations', organizations.routes)
+  // Tasks come first: the projects guard covers `/projects/*` and would run twice on task creation.
+  app.route('/api/organizations/:organizationId', tasks.routes)
   app.route('/api/organizations/:organizationId/projects', projects.routes)
   app.route('/api/uploads', uploads.routes)
 
